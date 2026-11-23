@@ -1,0 +1,20 @@
+ReCasaOS-VulnScan
+Copyright 2026 the ReCasaOS contributors
+
+Licensed under the Apache License, Version 2.0 (see LICENSE):
+https://www.apache.org/licenses/LICENSE-2.0
+
+The skeleton of the service (the gateway registration, the router and config
+set-up, the release configuration) is adapted from
+ReCasaOS/CasaOS-VirtManagement, Apache-2.0, by Vincenzo Lombardo, itself
+adapted from ReCasaOS/CasaOS-AppManagement, Apache-2.0, by IceWhale Technology
+and the ReCasaOS contributors.
+
+The release archives carry Trivy (https://github.com/aquasecurity/trivy),
+unmodified, as /usr/bin/casaos-trivy. Trivy is Copyright Aqua Security
+Software Ltd. and licensed under the Apache License, Version 2.0. The version
+and the SHA-256 of the release it is taken from are in trivy.lock.
+
+Not affiliated with IceWhale or Aqua Security. CASAOS is a trademark of
+Shanghai IceWhale Technology Limited, used here only to say what this is a
+module of.

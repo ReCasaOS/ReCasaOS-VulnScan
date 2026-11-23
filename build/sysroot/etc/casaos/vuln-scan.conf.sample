@@ -1,0 +1,13 @@
+[common]
+RuntimePath = /var/run/casaos
+
+[app]
+LogPath = /var/log/casaos/
+LogSaveName = vuln-scan
+LogFileExt = log
+; the results of the scans (small)
+StatePath = /var/lib/casaos-vuln-scan
+; Trivy's database (1.7 GB) and the temporary copy of the image being scanned.
+; empty: a folder beside Docker's data, where the room is
+WorkPath =
+TrivyPath = /usr/bin/casaos-trivy

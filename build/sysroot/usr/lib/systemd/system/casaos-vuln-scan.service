@@ -1,0 +1,19 @@
+[Unit]
+After=casaos-gateway.service
+After=casaos-message-bus.service
+After=docker.service
+Description=ReCasaOS Vulnerability Scan Service
+
+[Service]
+ExecStartPre=/usr/bin/casaos-vuln-scan -v
+ExecStart=/usr/bin/casaos-vuln-scan -c /etc/casaos/vuln-scan.conf
+PIDFile=/var/run/casaos/vuln-scan.pid
+Restart=always
+Type=notify
+# a scan must never take the box from its apps
+Nice=19
+IOSchedulingClass=idle
+MemoryHigh=512M
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,205 @@
+openapi: 3.0.3
+
+info:
+  title: ReCasaOS Vulnerability Scan API
+  version: v2
+  description: |
+    Scans the images of the box's containers for known vulnerabilities with Trivy, every night and on demand, and says which apps have a critical one that an update of the app would fix.
+
+    Every route is for the administrator and the box's own services.
+
+    For issues, please visit the [GitHub repository](https://github.com/ReCasaOS/ReCasaOS-VulnScan).
+
+servers:
+  - url: /v2/vuln_scan
+
+paths:
+  /status:
+    get:
+      summary: Whether a scan runs, when the last one ended and how old the vulnerability database is
+      operationId: getStatus
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusOK"
+
+  /apps:
+    get:
+      summary: What the last scan found, one entry per app
+      operationId: getApps
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppsOK"
+
+  /apps/{app}:
+    get:
+      summary: The vulnerabilities of one app, image by image
+      operationId: getApp
+      parameters:
+        - name: app
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AppOK"
+        "404":
+          $ref: "#/components/responses/Error"
+
+  /scan:
+    post:
+      summary: Start a scan now
+      operationId: startScan
+      responses:
+        "202":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
+components:
+  responses:
+    Error:
+      description: A message
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BaseResponse"
+
+  schemas:
+    BaseResponse:
+      type: object
+      properties:
+        message:
+          type: string
+
+    StatusOK:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Status"
+
+    AppsOK:
+      type: object
+      required: [data]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/AppSummary"
+
+    AppOK:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/AppDetail"
+
+    Status:
+      type: object
+      required: [running, last_error]
+      properties:
+        running:
+          type: boolean
+        last_run:
+          type: string
+          format: date-time
+          description: when the last scan ended; absent before the first one
+        last_error:
+          type: string
+          description: why the last scan stopped early; empty when it did not
+        db_updated_at:
+          type: string
+          format: date-time
+          description: the date of the vulnerability database; absent before the first download
+
+    AppSummary:
+      type: object
+      required: [app, loose, critical, high, actionable, os_only, skipped]
+      properties:
+        app:
+          type: string
+          description: the compose project, or the container's name when it has none
+        loose:
+          type: boolean
+          description: a container that belongs to no compose project
+        critical:
+          type: integer
+        high:
+          type: integer
+        actionable:
+          type: boolean
+          description: a critical vulnerability, and an update of the app is offered
+        os_only:
+          type: boolean
+          description: the Java libraries of an image were not checked
+        scanned_at:
+          type: string
+          format: date-time
+        skipped:
+          type: string
+          description: why an image of the app was not scanned; empty when all were
+
+    AppDetail:
+      type: object
+      required: [app, images]
+      properties:
+        app:
+          type: string
+        images:
+          type: array
+          items:
+            $ref: "#/components/schemas/ImageFindings"
+
+    ImageFindings:
+      type: object
+      required: [image_id, os_only, skipped, findings]
+      properties:
+        image_id:
+          type: string
+        os_only:
+          type: boolean
+        skipped:
+          type: string
+        scanned_at:
+          type: string
+          format: date-time
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/Finding"
+
+    Finding:
+      type: object
+      required: [id, package, installed, fixed, severity, title, url]
+      properties:
+        id:
+          type: string
+          example: CVE-2026-12345
+        package:
+          type: string
+        installed:
+          type: string
+        fixed:
+          type: string
+        severity:
+          type: string
+          enum: [CRITICAL, HIGH]
+        title:
+          type: string
+        url:
+          type: string
