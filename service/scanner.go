@@ -86,13 +86,40 @@ func (s *Scanner) Snapshot() (State, []Image) {
 // Pass scans every image once. It returns ErrRunning when a pass runs already, and nil
 // otherwise: what went wrong is kept as the state's LastError, beside the results.
 func (s *Scanner) Pass(ctx context.Context) error {
-	s.loaded()
-	s.mu.Lock()
-	if s.running {
-		s.mu.Unlock()
+	if !s.begin() {
 		return ErrRunning
 	}
+	s.run(ctx)
+
+	return nil
+}
+
+// Start runs a pass in the background; false when one runs already.
+func (s *Scanner) Start(ctx context.Context) bool {
+	if !s.begin() {
+		return false
+	}
+	go s.run(ctx)
+
+	return true
+}
+
+// begin claims the one pass that may run.
+func (s *Scanner) begin() bool {
+	s.loaded()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.running {
+		return false
+	}
 	s.running = true
+
+	return true
+}
+
+// run is a pass that begin has claimed.
+func (s *Scanner) run(ctx context.Context) {
+	s.mu.Lock()
 	state := s.state
 	state.Images, state.Told = maps.Clone(s.state.Images), maps.Clone(s.state.Told)
 	images := s.images
@@ -127,8 +154,6 @@ func (s *Scanner) Pass(ctx context.Context) error {
 	s.mu.Lock()
 	s.state, s.images, s.running = state, images, false
 	s.mu.Unlock()
-
-	return nil
 }
 
 // waitWhileBusy is false when the box stayed busy for BusyLimit, or ctx ended. A Busy that

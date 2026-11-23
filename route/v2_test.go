@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/codegen"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/config"
+	v2Route "github.com/ReCasaOS/ReCasaOS-VulnScan/route/v2"
 )
 
 type noScans struct{}
@@ -137,5 +139,64 @@ func TestRoutesRefuseTokenInQuery(t *testing.T) {
 		if code := answer(r.method, r.path+"?token="+token, "", "203.0.113.5:40000"); code != http.StatusUnauthorized {
 			t.Errorf("%s %s: %d, want 401", r.method, r.path, code)
 		}
+	}
+}
+
+type scansStub struct {
+	noScans
+	running bool
+}
+
+func (s scansStub) Start() bool { return !s.running }
+func (scansStub) App(name string) (codegen.AppDetail, bool) {
+	return codegen.AppDetail{}, false
+}
+func (scansStub) Apps() []codegen.AppSummary {
+	return []codegen.AppSummary{{App: "vaultwarden", Critical: 4, High: 117, Actionable: true}}
+}
+
+func ask(t *testing.T, scans v2Route.Scans, method, path string) (int, string) {
+	t.Helper()
+	box(t, "user", true)
+	request := httptest.NewRequest(method, path, nil)
+	request.RemoteAddr = "127.0.0.1:40000"
+	request.Header.Set("Authorization", "Internal s3cret")
+	recorder := httptest.NewRecorder()
+	InitV2Router(scans).ServeHTTP(recorder, request)
+
+	return recorder.Code, strings.TrimSpace(recorder.Body.String())
+}
+
+func TestStartScanConflict(t *testing.T) {
+	if code, _ := ask(t, scansStub{running: true}, http.MethodPost, "/v2/vuln_scan/scan"); code != http.StatusConflict {
+		t.Fatalf("%d, want 409", code)
+	}
+}
+
+func TestStartScanAccepted(t *testing.T) {
+	if code, _ := ask(t, scansStub{}, http.MethodPost, "/v2/vuln_scan/scan"); code != http.StatusAccepted {
+		t.Fatalf("%d, want 202", code)
+	}
+}
+
+func TestGetAppUnknown(t *testing.T) {
+	if code, _ := ask(t, scansStub{}, http.MethodGet, "/v2/vuln_scan/apps/nothing"); code != http.StatusNotFound {
+		t.Fatalf("%d, want 404", code)
+	}
+}
+
+// The words of the API, as the dashboard reads them.
+func TestAppsShape(t *testing.T) {
+	code, body := ask(t, scansStub{}, http.MethodGet, "/v2/vuln_scan/apps")
+	want := `{"data":[{"actionable":true,"app":"vaultwarden","critical":4,"high":117,"loose":false,"os_only":false,"skipped":""}]}`
+	if code != http.StatusOK || body != want {
+		t.Fatalf("%d %s\nwant %s", code, body, want)
+	}
+}
+
+func TestStatusShape(t *testing.T) {
+	code, body := ask(t, scansStub{}, http.MethodGet, "/v2/vuln_scan/status")
+	if want := `{"data":{"last_error":"","running":false}}`; code != http.StatusOK || body != want {
+		t.Fatalf("%d %s\nwant %s", code, body, want)
 	}
 }
