@@ -21,7 +21,6 @@ import (
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/common"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/config"
-	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/trivy"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/route"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/service"
 	"github.com/coreos/go-systemd/daemon"
@@ -75,7 +74,7 @@ func main() {
 		logger.Error("error when trying to register the event type - the alerts of the scans will not be discoverable", zap.Error(err))
 	}
 
-	scanner, runner := newScanner(ctx, events)
+	scanner, runner := newScanner(events)
 	api := &service.API{Scanner: scanner, DB: runner.DBUpdatedAt, Ctx: ctx}
 
 	// setup listener
@@ -161,38 +160,17 @@ func main() {
 }
 
 // newScanner wires the scanner to the box: Docker's socket, the Trivy the archive ships, and
-// app-management. The work folder (Trivy's cache and its temporary copies) goes beside
-// Docker's data unless the configuration names one; when Docker does not answer at start it
-// falls back to the state folder, and the next start tries again.
-func newScanner(ctx context.Context, events service.Events) (*service.Scanner, trivy.Runner) {
+// app-management. The work folder (Trivy's cache and its temporary copies) is the one the
+// configuration names, or one beside Docker's data; a pass that cannot find it scans nothing.
+func newScanner(events service.Events) (*service.Scanner, service.LazyTrivy) {
 	docker := service.NewDockerSocket(dockerSocket)
-
-	work := config.AppInfo.WorkPath
-	if work == "" {
-		rootCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		root, err := docker.RootDir(rootCtx)
-		cancel()
-		if err != nil {
-			logger.Error("docker does not say where its data is, the scans work in the state folder", zap.Error(err))
-			work = config.AppInfo.StatePath
-		} else {
-			work = config.WorkDir(root)
-		}
-	}
-
-	cache, tmp := filepath.Join(work, "cache"), filepath.Join(work, "tmp")
-	for _, dir := range []string{cache, tmp} {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			logger.Error("error when creating a work folder", zap.String("dir", dir), zap.Error(err))
-		}
-	}
-
-	runner := trivy.Runner{Bin: config.AppInfo.TrivyPath, CacheDir: cache, TempDir: tmp, Timeout: 20 * time.Minute}
+	work := &service.Workspace{Fixed: config.AppInfo.WorkPath, Docker: docker}
+	scanner := service.LazyTrivy{Bin: config.AppInfo.TrivyPath, Timeout: 20 * time.Minute, Work: work}
 	appManagement := service.AppManagement{RuntimePath: config.CommonInfo.RuntimePath}
 
 	return &service.Scanner{
-		Docker: docker, Trivy: runner, Busy: appManagement.Busy, Updates: appManagement.Updates,
+		Docker: docker, Trivy: scanner, Busy: appManagement.Busy, Updates: appManagement.Updates,
 		Free: service.FreeBytes, Publish: events.Publish, Now: time.Now,
-		Dir: config.AppInfo.StatePath, Tmp: tmp,
-	}, runner
+		Dir: config.AppInfo.StatePath, TmpDir: work.Tmp,
+	}, scanner
 }

@@ -44,15 +44,6 @@ var (
 	}
 )
 
-// WorkDir is WorkPath, or a folder beside Docker's data root when it is empty.
-func WorkDir(dockerRootDir string) string {
-	if AppInfo.WorkPath != "" {
-		return AppInfo.WorkPath
-	}
-
-	return filepath.Join(filepath.Dir(filepath.Clean(dockerRootDir)), "casaos-vuln-scan")
-}
-
 func InitSetup(config string, sample string) {
 	if len(config) > 0 {
 		ConfigFilePath = config

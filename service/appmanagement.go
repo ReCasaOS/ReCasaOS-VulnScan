@@ -62,14 +62,14 @@ func (a AppManagement) Busy(ctx context.Context) (bool, error) {
 	return len(answer.Operations) > 0 || answer.OSUpgradeOpen, nil
 }
 
-// Updates says, for every app of the grid, whether something newer is offered: a newer image
-// of the tag it runs, or a newer version of a tag it is pinned to.
+// Updates says, for every app of the grid, whether an update is offered: what the Update
+// button of the dashboard would apply. A newer version of a tag an app is pinned to is not
+// one: app-management only says it, and nothing applies it.
 func (a AppManagement) Updates(ctx context.Context) (map[string]bool, error) {
 	var answer struct {
 		Data []struct {
-			Name            string            `json:"name"`
-			UpdateAvailable bool              `json:"update_available"`
-			NewerTags       []json.RawMessage `json:"newer_tags"`
+			Name            string `json:"name"`
+			UpdateAvailable bool   `json:"update_available"`
 		} `json:"data"`
 	}
 	if err := a.get(ctx, "/v2/app_management/web/appgrid", &answer); err != nil {
@@ -78,7 +78,7 @@ func (a AppManagement) Updates(ctx context.Context) (map[string]bool, error) {
 
 	updates := make(map[string]bool, len(answer.Data))
 	for _, item := range answer.Data {
-		updates[item.Name] = item.UpdateAvailable || len(item.NewerTags) > 0
+		updates[item.Name] = item.UpdateAvailable
 	}
 
 	return updates, nil

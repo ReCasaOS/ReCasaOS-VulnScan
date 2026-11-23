@@ -133,7 +133,8 @@ func TestAppManagementBusy(t *testing.T) {
 }
 
 func TestAppManagementUpdates(t *testing.T) {
-	// an update of the same tag, a newer version of a pinned one, nothing, and never checked
+	// an update the Update button would apply; a newer version of a pinned tag, which is said
+	// only and nothing applies; nothing; and never checked
 	grid := `{"data":[
 	 {"name":"same-tag","update_available":true},
 	 {"name":"pinned","update_available":false,"newer_tags":[{"image":"postgres:16"}]},
@@ -142,7 +143,7 @@ func TestAppManagementUpdates(t *testing.T) {
 	am := AppManagement{RuntimePath: appManagement(t, `{}`, grid)}
 
 	updates, err := am.Updates(context.Background())
-	want := map[string]bool{"same-tag": true, "pinned": true, "current": false, "unchecked": false}
+	want := map[string]bool{"same-tag": true, "pinned": false, "current": false, "unchecked": false}
 	if err != nil || !reflect.DeepEqual(updates, want) {
 		t.Fatalf("%v, err %v; want %v", updates, err, want)
 	}

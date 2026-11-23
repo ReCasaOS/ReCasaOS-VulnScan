@@ -32,6 +32,8 @@ type ImageResult struct {
 
 // State is everything the service keeps between two starts.
 type State struct {
+	// Inventory is the images the last pass found on the box, and who uses each.
+	Inventory []Image
 	// Images are the results, by image id.
 	Images map[string]ImageResult
 	// Told are the ids of the critical vulnerabilities already announced, by app.

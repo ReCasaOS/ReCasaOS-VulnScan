@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -26,6 +28,9 @@ type rig struct {
 	busy       []bool // one answer per question, then not busy
 	free       uint64
 	published  []map[string]string
+	publishErr error
+	tmpErr     error
+	tmp        string
 	now        time.Time
 	block      chan struct{} // when set, a scan waits for it
 	*Scanner
@@ -61,8 +66,11 @@ func newRig(t *testing.T) *rig {
 	t.Helper()
 	r := &rig{t: t, reports: map[string]string{}, updates: map[string]bool{}, free: 1 << 40,
 		db: time.Date(2026, 11, 23, 19, 0, 0, 0, time.UTC), now: time.Date(2026, 11, 24, 5, 30, 0, 0, time.UTC)}
+	tmp := t.TempDir()
+	r.tmp = tmp
 	r.Scanner = &Scanner{
-		Docker: r, Trivy: r, Dir: t.TempDir(), Tmp: t.TempDir(),
+		Docker: r, Trivy: r, Dir: t.TempDir(),
+		TmpDir: func(context.Context) (string, error) { return tmp, r.tmpErr },
 		Busy: func(context.Context) (bool, error) {
 			if len(r.busy) == 0 {
 				return false, nil
@@ -73,11 +81,15 @@ func newRig(t *testing.T) *rig {
 		},
 		Updates: func(context.Context) (map[string]bool, error) { return r.updates, r.updatesErr },
 		Free:    func(string) (uint64, error) { return r.free, nil },
-		Publish: func(name string, properties map[string]string) {
+		Publish: func(name string, properties map[string]string) error {
 			if name != EventFound {
 				t.Errorf("published %q", name)
 			}
+			if r.publishErr != nil {
+				return r.publishErr
+			}
 			r.published = append(r.published, properties)
+			return nil
 		},
 		Now:      func() time.Time { return r.now },
 		BusyWait: time.Millisecond, BusyLimit: time.Second,
@@ -443,5 +455,114 @@ func TestPassForgetsRemovedApps(t *testing.T) {
 	}
 	if len(state.Told["a"]) != 1 {
 		t.Fatalf("told %v: the app that stays keeps what it was told", state.Told)
+	}
+}
+
+// What is served after a restart is what was served before it: the images are kept with
+// their results, not learnt again at the next night.
+func TestSnapshotAfterARestart(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("CRITICAL CVE-1")
+	r.pass()
+	_, before := r.Snapshot()
+
+	again := newRig(t)
+	again.Dir = r.Dir
+	if _, images := again.Snapshot(); len(images) != 1 || !reflect.DeepEqual(images, before) {
+		t.Fatalf("%+v, want %+v", images, before)
+	}
+
+	// and a first pass that finds Docker down leaves them
+	again.dockerErr = errors.New("Cannot connect to the Docker daemon")
+	again.pass()
+	if state, images := again.Snapshot(); len(images) != 1 || len(state.Images["sha256:1"].Findings) != 1 {
+		t.Fatalf("%+v %+v", state.Images, images)
+	}
+}
+
+// A Trivy that was killed (a stop of the service, a power cut) leaves its copy of the image
+// behind: the next pass starts from an empty folder.
+func TestPassEmptiesTheTemporaryFolder(t *testing.T) {
+	r := newRig(t)
+	left := filepath.Join(r.tmp, "fanal-123", "layer.tar")
+	if err := os.MkdirAll(filepath.Dir(left), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(left, []byte("3.5 GB of image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.pass()
+
+	if entries, err := os.ReadDir(r.tmp); err != nil || len(entries) != 0 {
+		t.Fatalf("%v, err %v: want the folder there and empty", entries, err)
+	}
+}
+
+// No folder to work in (Docker does not say where its data is): nothing is scanned, and
+// nothing is written anywhere else.
+func TestPassWithoutAWorkFolder(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.tmpErr = errors.New("docker does not say where its data is")
+	r.pass()
+
+	if state, _ := r.Snapshot(); len(r.scans) != 0 || state.LastError != "docker does not say where its data is" {
+		t.Fatalf("scans %v, last error %q", r.scans, state.LastError)
+	}
+}
+
+// The first scan of a box downloads the database too, 1.7 GB of it.
+func TestPassRoomForTheDatabase(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.free = 1<<30 + 1<<30 + 1<<30 // the image, the margin, and not the database
+	r.db = time.Time{}
+	r.pass()
+	if state, _ := r.Snapshot(); len(r.scans) != 0 || state.Images["sha256:1"].Skipped != SkippedNoRoom {
+		t.Fatalf("no database yet: scans %v, %+v", r.scans, state.Images)
+	}
+
+	r.db = time.Date(2026, 11, 23, 19, 0, 0, 0, time.UTC)
+	r.pass()
+	if len(r.scans) != 1 {
+		t.Fatalf("the database is there: scans %v", r.scans)
+	}
+}
+
+// An alert the bus did not take is not noted as told: the next pass tells it.
+func TestPassToldOnlyOncePublished(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("CRITICAL CVE-1")
+	r.updates["a"] = true
+	r.publishErr = errors.New("the message bus does not answer")
+	r.pass()
+	if state, _ := r.Snapshot(); len(state.Told) != 0 {
+		t.Fatalf("told %v although nothing was published", state.Told)
+	}
+
+	r.publishErr = nil
+	r.pass()
+	if want := []map[string]string{{"apps": "a", "count": "1"}}; !reflect.DeepEqual(r.published, want) {
+		t.Fatalf("published %v, want %v", r.published, want)
+	}
+}
+
+// The full scan of an image with JAR files fails after it copied the whole image: once the
+// image is known for it, only its system packages are asked for.
+func TestPassJavaImageIsNotTriedInFullAgain(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = "!Unable to initialize the Java DB: Java DB update failed"
+	r.reports["sha256:1 os"] = report()
+	r.pass()
+	r.pass()
+
+	if want := []string{"sha256:1", "sha256:1 os", "sha256:1 os"}; !reflect.DeepEqual(r.scans, want) {
+		t.Fatalf("scans %v, want %v", r.scans, want)
+	}
+	if state, _ := r.Snapshot(); !state.Images["sha256:1"].OSOnly {
+		t.Fatal("the image is no longer said to be scanned for its system packages only")
 	}
 }

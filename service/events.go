@@ -11,9 +11,7 @@ import (
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/external"
-	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/common"
-	"go.uber.org/zap"
 )
 
 // Events publishes to the message bus over its unix socket.
@@ -73,20 +71,20 @@ func (e Events) Register(ctx context.Context) error {
 	return nil
 }
 
-// Publish sends an event. A failure is logged, never returned: an event that does not arrive
-// must not fail the scan it reports.
-func (e Events) Publish(name string, properties map[string]string) {
+// Publish sends an event.
+func (e Events) Publish(name string, properties map[string]string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	resp, err := external.PublishEventInSocket(ctx, e.RuntimePath, common.ServiceName, name, properties)
 	if err != nil {
-		logger.Error("error when publishing an event", zap.String("event", name), zap.Error(err))
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		logger.Error("error when publishing an event", zap.String("event", name), zap.String("status", resp.Status))
+		return fmt.Errorf("message bus answered %s to %s", resp.Status, name)
 	}
+
+	return nil
 }
