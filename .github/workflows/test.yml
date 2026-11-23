@@ -28,3 +28,6 @@ jobs:
 
       - name: Unit tests
         run: go test -race ./...
+
+      - name: The pinned Trivy is the one fetched
+        run: sh scripts/test-fetch-trivy.sh
