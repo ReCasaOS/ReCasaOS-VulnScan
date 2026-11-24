@@ -17,9 +17,13 @@ func NextRun(now time.Time) time.Time {
 	return next
 }
 
-// RunNightly scans every night at NextRun until ctx ends.
+// RunNightly scans every night at NextRun until ctx ends, and at once when no pass ever ran.
 // shortcut: a night the box was off is not caught up, the next night scans; add a catch-up if owners ask
 func (s *Scanner) RunNightly(ctx context.Context) {
+	// a box that has never scanned (the module was just installed) does not wait for the night
+	if state, _ := s.Snapshot(); state.LastRun.IsZero() {
+		_ = s.Pass(ctx)
+	}
 	for {
 		select {
 		case <-ctx.Done():
