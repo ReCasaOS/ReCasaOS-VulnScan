@@ -36,9 +36,14 @@ type rig struct {
 	*Scanner
 }
 
-func (r *rig) Containers(context.Context) ([]Container, error) { return r.containers, r.dockerErr }
-func (r *rig) RootDir(context.Context) (string, error)         { return "/var/lib/docker", nil }
-func (r *rig) DBUpdatedAt() (time.Time, error)                 { return r.db, nil }
+func (r *rig) Containers(context.Context) ([]Container, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	return r.containers, r.dockerErr
+}
+func (r *rig) RootDir(context.Context) (string, error) { return "/var/lib/docker", nil }
+func (r *rig) DBUpdatedAt() (time.Time, error)         { return r.db, nil }
 
 func (r *rig) Scan(_ context.Context, image string, osOnly bool) ([]byte, error) {
 	if r.block != nil {
