@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "name": "vuln-scan",
+  "title": "Vulnerability scan",
+  "description": "Scans the images of your apps for known vulnerabilities every night with Trivy. Needs about 2.5 GB of disk beside Docker's data for the vulnerability database.",
+  "component": "ReCasaOS-VulnScan",
+  "unit": "casaos-vuln-scan.service",
+  "gateway_route": "/v2/vuln_scan",
+  "packages": {
+    "common": [],
+    "amd64": [],
+    "arm64": []
+  },
+  "min_recasaos": "0.5.173",
+  "os": ["debian:12", "debian:13", "ubuntu:22.04", "ubuntu:24.04", "ubuntu:26.04"]
+}

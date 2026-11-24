@@ -1,0 +1,57 @@
+version: 2
+project_name: casaos-vuln-scan
+before:
+  hooks:
+    - go generate
+    - go mod tidy
+    # the Trivy that trivy.lock pins, checked against its SHA-256, for both architectures
+    - sh scripts/fetch-trivy.sh amd64
+    - sh scripts/fetch-trivy.sh arm64
+builds:
+  - id: casaos-vuln-scan
+    binary: build/sysroot/usr/bin/casaos-vuln-scan
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -X main.commit={{.Commit}}
+      - -X main.date={{.Date}}
+      - -s
+      - -w
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+archives:
+  # the same names as the other components: linux-<arch>-casaos-vuln-scan-v<version>.tar.gz
+  - name_template: >-
+      {{ .Os }}-{{ .Arch }}-{{ .ProjectName }}-v{{ .Version }}
+    id: casaos-vuln-scan
+    ids:
+      - casaos-vuln-scan
+    files:
+      - build/**/*
+      - module.json
+      - LICENSE
+      - NOTICE
+      # the scanner of this archive's architecture, beside the service
+      - src: "dist-trivy/{{ .Arch }}/casaos-trivy"
+        dst: build/sysroot/usr/bin
+        strip_parent: true
+        info:
+          mode: 0755
+checksum:
+  name_template: "checksums.txt"
+snapshot:
+  version_template: "{{ incpatch .Version }}"
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+release:
+  draft: false
+  prerelease: auto
+  mode: replace
+  name_template: "v{{ .Version }}"
