@@ -172,7 +172,7 @@ func main() {
 // configuration names, or one beside Docker's data; a pass that cannot find it scans nothing.
 func newScanner(events service.Events, docker *service.DockerSocket) (*service.Scanner, service.LazyTrivy) {
 	work := &service.Workspace{Fixed: config.AppInfo.WorkPath, Docker: docker}
-	scanner := service.LazyTrivy{Bin: config.AppInfo.TrivyPath, Timeout: 20 * time.Minute, Work: work}
+	scanner := service.LazyTrivy{Bin: config.AppInfo.TrivyPath, Timeout: 20 * time.Minute, Work: work, MemoryHigh: "1536M"}
 	appManagement := service.AppManagement{RuntimePath: config.CommonInfo.RuntimePath}
 
 	return &service.Scanner{

@@ -13,6 +13,7 @@ Type=notify
 # a scan must never take the box from its apps
 Nice=19
 IOSchedulingClass=idle
+# the API's cap; a scan runs in a scope of its own, capped apart (pkg/trivy)
 MemoryHigh=512M
 
 [Install]

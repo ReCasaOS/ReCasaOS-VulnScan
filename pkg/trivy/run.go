@@ -52,6 +52,32 @@ type Runner struct {
 	// TempDir is where Trivy copies the whole image on its first scan.
 	TempDir string
 	Timeout time.Duration
+	// MemoryHigh, when set, runs Trivy in a systemd scope of its own under that cap, out of the
+	// service's: a scan of a large image under the service's 512M throttled the API with it until
+	// it stopped answering (2026-11-24, 50 minutes, the dashboard lost its Security card).
+	MemoryHigh string
+}
+
+// scoped is the command line that runs bin in a scope of its own, or bin itself where there
+// is no systemd to ask (then the scan shares the service's cap, as before).
+func scoped(bin string, args []string, memoryHigh string) (string, []string) {
+	if memoryHigh == "" {
+		return bin, args
+	}
+	if _, err := os.Stat("/run/systemd/system"); err != nil {
+		return bin, args
+	}
+	run, err := exec.LookPath("systemd-run")
+	if err != nil {
+		return bin, args
+	}
+	return run, scopeArgs(bin, args, memoryHigh)
+}
+
+// scopeArgs: --scope execs the command in place, so a kill at the deadline still reaches Trivy;
+// the nice and idle I/O class of the service are inherited.
+func scopeArgs(bin string, args []string, memoryHigh string) []string {
+	return append([]string{"--scope", "--quiet", "--collect", "--property=MemoryHigh=" + memoryHigh, "--", bin}, args...)
 }
 
 // Scan returns the JSON report of one image. The error of a scan that failed ends with
@@ -66,7 +92,8 @@ func (r Runner) Scan(ctx context.Context, image string, osOnly bool) ([]byte, er
 	defer cancel()
 
 	var stdout, stderr bytes.Buffer
-	cmd := exec.CommandContext(ctx, r.Bin, args...)
+	name, argv := scoped(r.Bin, args, r.MemoryHigh)
+	cmd := exec.CommandContext(ctx, name, argv...)
 	cmd.Env = append(os.Environ(), "TMPDIR="+r.TempDir)
 	cmd.Stdout = &limited{w: &stdout, left: maxReport}
 	cmd.Stderr = &limited{w: &stderr, left: 1 << 20, drop: true}

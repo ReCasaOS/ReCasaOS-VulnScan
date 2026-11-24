@@ -68,6 +68,8 @@ type LazyTrivy struct {
 	Bin     string
 	Timeout time.Duration
 	Work    *Workspace
+	// MemoryHigh is the cap of a scan, in a scope of its own (trivy.Runner)
+	MemoryHigh string
 }
 
 func (l LazyTrivy) Scan(ctx context.Context, image string, osOnly bool) ([]byte, error) {
@@ -82,7 +84,7 @@ func (l LazyTrivy) Scan(ctx context.Context, image string, osOnly bool) ([]byte,
 		}
 	}
 
-	return trivy.Runner{Bin: l.Bin, CacheDir: cache, TempDir: tmp, Timeout: l.Timeout}.Scan(ctx, image, osOnly)
+	return trivy.Runner{Bin: l.Bin, CacheDir: cache, TempDir: tmp, Timeout: l.Timeout, MemoryHigh: l.MemoryHigh}.Scan(ctx, image, osOnly)
 }
 
 // DBUpdatedAt is the date of the vulnerability database; zero while there is none, or no
