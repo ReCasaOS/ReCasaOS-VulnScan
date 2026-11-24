@@ -123,3 +123,15 @@ func TestDBUpdatedAt(t *testing.T) {
 		t.Fatalf("%v, err %v", at, err)
 	}
 }
+
+func TestAScanRunsInAScopeOfItsOwn(t *testing.T) {
+	args := scopeArgs("/usr/bin/casaos-trivy", []string{"image", "sha256:abc"}, "1536M")
+	want := []string{"--scope", "--quiet", "--collect", "--property=MemoryHigh=1536M", "--", "/usr/bin/casaos-trivy", "image", "sha256:abc"}
+	if !slices.Equal(args, want) {
+		t.Fatalf("%v, want %v", args, want)
+	}
+	// no cap asked: Trivy itself
+	if bin, args := scoped("/usr/bin/casaos-trivy", []string{"image"}, ""); bin != "/usr/bin/casaos-trivy" || !slices.Equal(args, []string{"image"}) {
+		t.Fatalf("%s %v", bin, args)
+	}
+}
