@@ -2,7 +2,7 @@
 
 An optional module of [ReCasaOS](https://github.com/ReCasaOS): it scans the images of the
 box's containers for known vulnerabilities with [Trivy](https://github.com/aquasecurity/trivy),
-every night at 05:30 and on demand.
+every night at 05:30, once right after it is installed, and on demand.
 
 It keeps the critical and high vulnerabilities that have a fix. The dashboard puts a badge on
 an app, and the box sends an alert, in one case only: a critical vulnerability in an app for

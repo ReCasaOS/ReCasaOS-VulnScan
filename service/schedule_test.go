@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -38,5 +39,51 @@ func TestNextRunDST(t *testing.T) {
 		if got.Hour() != 5 || got.Minute() != 30 || got.Day() != day.Day()+1 || got.Location() != paris {
 			t.Errorf("%v: %v, want 05:30 the next day in Paris", day, got)
 		}
+	}
+}
+
+// A box that has just had the module installed has nothing to show until 05:30: the first
+// pass does not wait for the night.
+func TestRunNightlyScansAtOnceWhenNeverScanned(t *testing.T) {
+	r := newRig(t)
+	r.now = time.Date(2099, 1, 1, 10, 0, 0, 0, time.UTC) // RunNightly waits on the real clock: a night that never comes
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.RunNightly(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if state, _ := r.Snapshot(); !state.LastRun.IsZero() {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("no pass before the night")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	cancel()
+	<-done
+}
+
+// A restart of a box that has its results does not scan again: the night does.
+func TestRunNightlyWaitsForTheNightOnceScanned(t *testing.T) {
+	r := newRig(t)
+	r.now = time.Date(2099, 1, 1, 10, 0, 0, 0, time.UTC) // RunNightly waits on the real clock: a night that never comes
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report()
+	r.pass()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); r.RunNightly(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	<-done
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.scans) != 1 {
+		t.Fatalf("scans %v: want the one of the pass by hand", r.scans)
 	}
 }
