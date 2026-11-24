@@ -46,7 +46,7 @@ func TestNextRunDST(t *testing.T) {
 // pass does not wait for the night.
 func TestRunNightlyScansAtOnceWhenNeverScanned(t *testing.T) {
 	r := newRig(t)
-	r.now = time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	r.now = time.Date(2099, 1, 1, 10, 0, 0, 0, time.UTC) // RunNightly waits on the real clock: a night that never comes
 	r.containers = []Container{app("a", "sha256:1")}
 	r.reports["sha256:1"] = report()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -70,7 +70,7 @@ func TestRunNightlyScansAtOnceWhenNeverScanned(t *testing.T) {
 // A restart of a box that has its results does not scan again: the night does.
 func TestRunNightlyWaitsForTheNightOnceScanned(t *testing.T) {
 	r := newRig(t)
-	r.now = time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC)
+	r.now = time.Date(2099, 1, 1, 10, 0, 0, 0, time.UTC) // RunNightly waits on the real clock: a night that never comes
 	r.containers = []Container{app("a", "sha256:1")}
 	r.reports["sha256:1"] = report()
 	r.pass()
