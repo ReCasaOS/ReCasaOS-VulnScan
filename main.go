@@ -74,7 +74,8 @@ func main() {
 		logger.Error("error when trying to register the event type - the alerts of the scans will not be discoverable", zap.Error(err))
 	}
 
-	scanner, runner := newScanner(events)
+	docker := service.NewDockerSocket(dockerSocket)
+	scanner, runner := newScanner(events, docker)
 	api := &service.API{Scanner: scanner, DB: runner.DBUpdatedAt, Ctx: ctx}
 
 	// setup listener
@@ -121,6 +122,12 @@ func main() {
 		scanner.RunNightly(ctx)
 	}()
 
+	following := make(chan struct{})
+	go func() {
+		defer close(following)
+		scanner.Follow(ctx, docker.Changes)
+	}()
+
 	// notify systemd that we are ready
 	{
 		if supported, err := daemon.SdNotify(false, daemon.SdNotifyReady); err != nil {
@@ -157,13 +164,13 @@ func main() {
 
 	cancel()
 	<-nightly
+	<-following
 }
 
 // newScanner wires the scanner to the box: Docker's socket, the Trivy the archive ships, and
 // app-management. The work folder (Trivy's cache and its temporary copies) is the one the
 // configuration names, or one beside Docker's data; a pass that cannot find it scans nothing.
-func newScanner(events service.Events) (*service.Scanner, service.LazyTrivy) {
-	docker := service.NewDockerSocket(dockerSocket)
+func newScanner(events service.Events, docker *service.DockerSocket) (*service.Scanner, service.LazyTrivy) {
 	work := &service.Workspace{Fixed: config.AppInfo.WorkPath, Docker: docker}
 	scanner := service.LazyTrivy{Bin: config.AppInfo.TrivyPath, Timeout: 20 * time.Minute, Work: work}
 	appManagement := service.AppManagement{RuntimePath: config.CommonInfo.RuntimePath}

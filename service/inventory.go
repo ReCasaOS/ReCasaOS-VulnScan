@@ -71,18 +71,20 @@ type Docker interface {
 // DockerSocket asks the daemon on its unix socket. Three reads need no client library.
 type DockerSocket struct {
 	client *http.Client
+	// stream has no time limit: it reads the daemon's events for as long as they come.
+	stream *http.Client
 	base   string
 }
 
 func NewDockerSocket(path string) *DockerSocket {
+	transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "unix", path)
+	}}
+
 	return &DockerSocket{
-		base: "http://docker",
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-			Transport: &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-				return (&net.Dialer{}).DialContext(ctx, "unix", path)
-			}},
-		},
+		base:   "http://docker",
+		client: &http.Client{Timeout: 30 * time.Second, Transport: transport},
+		stream: &http.Client{Transport: transport},
 	}
 }
 
@@ -135,6 +137,32 @@ func (d *DockerSocket) Containers(ctx context.Context) ([]Container, error) {
 	}
 
 	return containers, nil
+}
+
+// Changes calls on each time a container is made or removed, until the daemon's stream of
+// events ends or ctx does; it always returns an error. A container is made when an app is
+// installed, updated or changed, and removed with the app: not when it is restarted.
+func (d *DockerSocket) Changes(ctx context.Context, on func()) error {
+	filters := url.QueryEscape(`{"type":["container"],"event":["create","destroy"]}`)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, d.base+"/events?filters="+filters, nil)
+	if err != nil {
+		return err
+	}
+	response, err := d.stream.Do(request)
+	if err != nil {
+		return err
+	}
+	defer response.Body.Close()
+
+	if response.StatusCode != http.StatusOK {
+		return fmt.Errorf("docker answered %s to /events", response.Status)
+	}
+	for events := json.NewDecoder(response.Body); ; on() {
+		var event struct{}
+		if err := events.Decode(&event); err != nil {
+			return err
+		}
+	}
 }
 
 // RootDir is where Docker keeps its data.
