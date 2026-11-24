@@ -13,10 +13,10 @@ import (
 var followRetry = 10 * time.Second
 
 // Follow scans when the images the apps run are no longer those of the last pass: an app
-// was installed, updated or removed, and its results must not wait for the night. created
-// tells each container made until its stream is lost (DockerSocket.Created); it is asked
+// was installed, updated or removed, and its results must not wait for the night. changes
+// tells each container made or removed until its stream is lost (DockerSocket.Changes); it is asked
 // again then, and what changed meanwhile is looked for. Follow returns when ctx ends.
-func (s *Scanner) Follow(ctx context.Context, created func(ctx context.Context, on func()) error) {
+func (s *Scanner) Follow(ctx context.Context, changes func(ctx context.Context, on func()) error) {
 	wake := make(chan struct{}, 1)
 	poke := func() {
 		select {
@@ -32,7 +32,7 @@ func (s *Scanner) Follow(ctx context.Context, created func(ctx context.Context, 
 		defer stream.Done()
 		for {
 			poke() // the stream was lost for a while, or never asked: look once
-			_ = created(ctx, poke)
+			_ = changes(ctx, poke)
 			select {
 			case <-ctx.Done():
 				return

@@ -139,11 +139,11 @@ func (d *DockerSocket) Containers(ctx context.Context) ([]Container, error) {
 	return containers, nil
 }
 
-// Created calls on each time a container is made, until the daemon's stream of events ends
-// or ctx does; it always returns an error. A container is made when an app is installed,
-// updated or changed, not when it is restarted.
-func (d *DockerSocket) Created(ctx context.Context, on func()) error {
-	filters := url.QueryEscape(`{"type":["container"],"event":["create"]}`)
+// Changes calls on each time a container is made or removed, until the daemon's stream of
+// events ends or ctx does; it always returns an error. A container is made when an app is
+// installed, updated or changed, and removed with the app: not when it is restarted.
+func (d *DockerSocket) Changes(ctx context.Context, on func()) error {
+	filters := url.QueryEscape(`{"type":["container"],"event":["create","destroy"]}`)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, d.base+"/events?filters="+filters, nil)
 	if err != nil {
 		return err

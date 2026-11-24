@@ -79,6 +79,24 @@ func TestFollowScansWhenAnAppRunsANewImage(t *testing.T) {
 	}
 }
 
+// An app that was removed makes no container: it is the end of its containers that tells.
+func TestFollowForgetsAnAppThatWasRemoved(t *testing.T) {
+	r := newRig(t)
+	r.setContainers(app("a", "sha256:1"), app("b", "sha256:2"))
+	r.reports["sha256:1"], r.reports["sha256:2"] = report(), report()
+	r.pass()
+	made, stop := r.follow(t)
+	defer stop()
+
+	r.setContainers(app("a", "sha256:1"))
+	made <- struct{}{}
+	r.waitScans(t, 3)
+
+	if state, _ := r.Snapshot(); len(state.Inventory) != 1 || len(state.Images) != 1 {
+		t.Fatalf("inventory %+v, results %v: want what the app left only", state.Inventory, state.Images)
+	}
+}
+
 // A container made again from the same image (a restart of the app, a change of its
 // settings) and a container made by hand change nothing an app runs: no pass.
 func TestFollowLeavesAloneWhatDidNotChange(t *testing.T) {
@@ -114,11 +132,11 @@ func TestFollowScansAChangeMadeDuringAPass(t *testing.T) {
 	t.Cleanup(func() { followRetry = 10 * time.Second })
 	r.setContainers(app("a", "sha256:1"))
 	r.reports["sha256:1"], r.reports["sha256:2"] = report(), report()
-	r.block = make(chan struct{})
+	r.block, r.entered = make(chan struct{}), make(chan struct{}, 10)
 	if !r.Start(context.Background()) {
 		t.Fatal("the pass did not start")
 	}
-	time.Sleep(30 * time.Millisecond) // the pass has listed the containers and waits in its scan
+	<-r.entered // the pass has listed the containers and waits in its scan
 	made, stop := r.follow(t)
 	defer stop()
 
@@ -161,24 +179,24 @@ func TestFollowAsksTheStreamAgainAndChecks(t *testing.T) {
 	<-done
 }
 
-func TestDockerCreatedTellsEachContainerMade(t *testing.T) {
+func TestDockerChangesTellsEachContainerMadeOrRemoved(t *testing.T) {
 	var query string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		query = r.URL.Path + "?" + r.URL.Query().Get("filters")
-		w.Write([]byte(`{"Type":"container","Action":"create"}` + "\n" + `{"Type":"container","Action":"create"}` + "\n"))
+		w.Write([]byte(`{"Type":"container","Action":"create"}` + "\n" + `{"Type":"container","Action":"destroy"}` + "\n"))
 	}))
 	defer server.Close()
 	docker := NewDockerSocket("unused")
 	docker.base, docker.stream = server.URL, server.Client()
 
 	count := 0
-	if err := docker.Created(context.Background(), func() { count++ }); err == nil {
+	if err := docker.Changes(context.Background(), func() { count++ }); err == nil {
 		t.Error("a stream that ended is an error: the caller asks again")
 	}
 	if count != 2 {
 		t.Errorf("told %d times, want 2", count)
 	}
-	if want := `/events?{"type":["container"],"event":["create"]}`; query != want {
+	if want := `/events?{"type":["container"],"event":["create","destroy"]}`; query != want {
 		t.Errorf("asked %s, want %s", query, want)
 	}
 }

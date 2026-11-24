@@ -125,7 +125,7 @@ func main() {
 	following := make(chan struct{})
 	go func() {
 		defer close(following)
-		scanner.Follow(ctx, docker.Created)
+		scanner.Follow(ctx, docker.Changes)
 	}()
 
 	// notify systemd that we are ready
