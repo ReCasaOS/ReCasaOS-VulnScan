@@ -32,6 +32,8 @@ type rig struct {
 	tmpErr     error
 	tmp        string
 	now        time.Time
+	imageSize  int64 // what ImageSize says of any image, unless sizeErr
+	sizeErr    error
 	block      chan struct{} // when set, a scan waits for it
 	entered    chan struct{} // when set, a scan says it began
 	*Scanner
@@ -44,14 +46,21 @@ func (r *rig) Containers(context.Context) ([]Container, error) {
 	return r.containers, r.dockerErr
 }
 func (r *rig) RootDir(context.Context) (string, error) { return "/var/lib/docker", nil }
-func (r *rig) DBUpdatedAt() (time.Time, error)         { return r.db, nil }
+func (r *rig) ImageSize(context.Context, string) (int64, error) {
+	return r.imageSize, r.sizeErr
+}
+func (r *rig) DBUpdatedAt() (time.Time, error) { return r.db, nil }
 
-func (r *rig) Scan(_ context.Context, image string, osOnly bool) ([]byte, error) {
+func (r *rig) Scan(ctx context.Context, image string, osOnly bool) ([]byte, error) {
 	if r.entered != nil {
 		r.entered <- struct{}{}
 	}
 	if r.block != nil {
-		<-r.block
+		select {
+		case <-r.block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -73,7 +82,7 @@ func (r *rig) Scan(_ context.Context, image string, osOnly bool) ([]byte, error)
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	r := &rig{t: t, reports: map[string]string{}, updates: map[string]bool{}, free: 1 << 40,
+	r := &rig{t: t, reports: map[string]string{}, updates: map[string]bool{}, free: 1 << 40, imageSize: 1 << 30,
 		db: time.Date(2026, 11, 23, 19, 0, 0, 0, time.UTC), now: time.Date(2026, 11, 24, 5, 30, 0, 0, time.UTC)}
 	tmp := t.TempDir()
 	r.tmp = tmp
@@ -573,5 +582,82 @@ func TestPassJavaImageIsNotTriedInFullAgain(t *testing.T) {
 	}
 	if state, _ := r.Snapshot(); !state.Images["sha256:1"].OSOnly {
 		t.Fatal("the image is no longer said to be scanned for its system packages only")
+	}
+}
+
+// A pass and an on-demand scan share one Trivy: the second waits for the first, whatever
+// the pass is in the middle of.
+func TestTwoScansNeverOverlap(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"], r.reports["sha256:2"] = report(), report()
+	r.block, r.entered = make(chan struct{}), make(chan struct{}, 2)
+	passDone := make(chan error, 1)
+	go func() { passDone <- r.Pass(context.Background()) }()
+	<-r.entered
+
+	scanDone := make(chan error, 1)
+	go func() { _, err := r.scanOne(context.Background(), "sha256:2", false); scanDone <- err }()
+	select {
+	case <-r.entered:
+		t.Fatal("a second Trivy began while the first still ran")
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(r.block)
+	if err := <-passDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-scanDone; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWithTrivyGivesUpWithContext(t *testing.T) {
+	r := newRig(t)
+	holding, release := make(chan struct{}), make(chan struct{})
+	go func() { _ = r.withTrivy(context.Background(), func() error { close(holding); <-release; return nil }) }()
+	<-holding
+	defer close(release)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	called := false
+	err := r.withTrivy(ctx, func() error { called = true; return nil })
+	if !errors.Is(err, context.Canceled) || called {
+		t.Fatalf("err %v, called %v", err, called)
+	}
+}
+
+// The pass empties the temporary folder, which holds the copy a running scan is making.
+func TestPassDoesNotEmptyTmpDuringAScan(t *testing.T) {
+	r := newRig(t)
+	holding, release := make(chan struct{}), make(chan struct{})
+	scanDone := make(chan error, 1)
+	go func() {
+		scanDone <- r.withTrivy(context.Background(), func() error { close(holding); <-release; return nil })
+	}()
+	<-holding
+	copyOfImage := filepath.Join(r.tmp, "copy")
+	if err := os.WriteFile(copyOfImage, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	passDone := make(chan error, 1)
+	go func() { passDone <- r.Pass(context.Background()) }()
+	time.Sleep(50 * time.Millisecond)
+	if _, err := os.Stat(copyOfImage); err != nil {
+		t.Fatalf("the pass emptied the folder under a running scan: %v", err)
+	}
+
+	close(release)
+	if err := <-scanDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-passDone; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(copyOfImage); !os.IsNotExist(err) {
+		t.Fatalf("the pass left the old copy: %v", err)
 	}
 }

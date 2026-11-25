@@ -13,7 +13,8 @@ type rootDir struct {
 	asked int
 }
 
-func (r *rootDir) Containers(context.Context) ([]Container, error) { return nil, nil }
+func (r *rootDir) Containers(context.Context) ([]Container, error)  { return nil, nil }
+func (r *rootDir) ImageSize(context.Context, string) (int64, error) { return 0, nil }
 func (r *rootDir) RootDir(context.Context) (string, error) {
 	r.asked++
 	return r.dir, r.err

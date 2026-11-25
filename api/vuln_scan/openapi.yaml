@@ -70,6 +70,26 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
 
+  /compare:
+    post:
+      summary: Whether an image has more critical vulnerabilities than another, scanning both if need be
+      operationId: compareImages
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompareRequest"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CompareOK"
+        "400":
+          $ref: "#/components/responses/Error"
+
 components:
   responses:
     Error:
@@ -108,6 +128,48 @@ components:
       properties:
         data:
           $ref: "#/components/schemas/AppDetail"
+
+    CompareRequest:
+      type: object
+      required: [current, candidate]
+      properties:
+        current:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: the image the app runs
+        candidate:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: the image the update would run
+
+    CompareOK:
+      type: object
+      required: [data]
+      properties:
+        data:
+          $ref: "#/components/schemas/Comparison"
+
+    Comparison:
+      type: object
+      required: [verdict, current_critical, candidate_critical, added, reason]
+      properties:
+        verdict:
+          type: string
+          enum: [worse, not_worse, unknown]
+        current_critical:
+          type: integer
+        candidate_critical:
+          type: integer
+        added:
+          type: array
+          description: the critical vulnerabilities of the candidate that the current image does not have
+          items:
+            $ref: "#/components/schemas/Finding"
+        reason:
+          type: string
+          description: why the verdict is unknown; empty otherwise
 
     Status:
       type: object

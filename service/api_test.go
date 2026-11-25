@@ -115,3 +115,17 @@ func TestAPIUpdatesAreKeptFiveMinutes(t *testing.T) {
 		t.Fatal("a badge although app-management does not answer")
 	}
 }
+
+func TestAPICompareSpeaksTheAPIsWords(t *testing.T) {
+	r := newRig(t)
+	r.reports["cur"], r.reports["cand"] = report("CRITICAL CVE-1"), report("CRITICAL CVE-1", "CRITICAL CVE-2")
+
+	got := newAPI(r).Compare(context.Background(), "cur", "cand")
+	if got.Verdict != "worse" || got.CurrentCritical != 1 || got.CandidateCritical != 2 || len(got.Added) != 1 || got.Added[0].Id != "CVE-2" || got.Added[0].Severity != "CRITICAL" {
+		t.Fatalf("%+v", got)
+	}
+	// no finding is an empty list, not null: the caller reads its length
+	if got := newAPI(r).Compare(context.Background(), "cand", "cur"); got.Verdict != "not_worse" || got.Added == nil {
+		t.Fatalf("%+v", got)
+	}
+}

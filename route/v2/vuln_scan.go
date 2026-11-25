@@ -1,6 +1,7 @@
 package v2
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/codegen"
@@ -15,6 +16,8 @@ type Scans interface {
 	App(name string) (codegen.AppDetail, bool)
 	// Start starts a scan in the background; false when one already runs.
 	Start() bool
+	// Compare scans both images if need be and says whether the candidate is worse.
+	Compare(ctx context.Context, current, candidate string) codegen.Comparison
 }
 
 type VulnScan struct {
@@ -52,4 +55,13 @@ func (v *VulnScan) StartScan(ctx echo.Context) error {
 	}
 
 	return message(ctx, http.StatusAccepted, "scan started")
+}
+
+func (v *VulnScan) CompareImages(ctx echo.Context) error {
+	var body codegen.CompareImagesJSONRequestBody
+	if err := ctx.Bind(&body); err != nil {
+		return message(ctx, http.StatusBadRequest, "the body is not what the API expects")
+	}
+
+	return ctx.JSON(http.StatusOK, codegen.CompareOK{Data: v.scans.Compare(ctx.Request().Context(), body.Current, body.Candidate)})
 }

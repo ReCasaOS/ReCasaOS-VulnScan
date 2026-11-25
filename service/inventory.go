@@ -66,6 +66,8 @@ func GroupImages(containers []Container) []Image {
 type Docker interface {
 	Containers(ctx context.Context) ([]Container, error)
 	RootDir(ctx context.Context) (string, error)
+	// ImageSize is the size of an image, by id or name, in bytes.
+	ImageSize(ctx context.Context, id string) (int64, error)
 }
 
 // DockerSocket asks the daemon on its unix socket. Three reads need no client library.
@@ -163,6 +165,16 @@ func (d *DockerSocket) Changes(ctx context.Context, on func()) error {
 			return err
 		}
 	}
+}
+
+// ImageSize is the size of an image on the box, by id or name.
+func (d *DockerSocket) ImageSize(ctx context.Context, id string) (int64, error) {
+	var image struct{ Size int64 }
+	if _, err := d.get(ctx, "/images/"+url.PathEscape(id)+"/json", &image); err != nil {
+		return 0, err
+	}
+
+	return image.Size, nil
 }
 
 // RootDir is where Docker keeps its data.
