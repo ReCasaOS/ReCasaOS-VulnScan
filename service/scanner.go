@@ -64,6 +64,23 @@ type Scanner struct {
 	mu      sync.Mutex // guards what follows
 	running bool
 	state   State
+
+	trivyOnce sync.Once
+	trivy     chan struct{} // holds one token: whoever has it runs Trivy
+}
+
+// withTrivy runs do with the only token to run Trivy: two Trivy at once would fight over the
+// temporary folder and the disk. It gives up with ctx's error when ctx ends before the token
+// is free.
+func (s *Scanner) withTrivy(ctx context.Context, do func() error) error {
+	s.trivyOnce.Do(func() { s.trivy = make(chan struct{}, 1) })
+	select {
+	case s.trivy <- struct{}{}:
+		defer func() { <-s.trivy }()
+		return do()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Scanner) loaded() {
@@ -203,14 +220,22 @@ func (s *Scanner) emptyTmp(ctx context.Context) (string, error) {
 	if err := os.MkdirAll(tmp, 0o700); err != nil {
 		return "", err
 	}
-	entries, err := os.ReadDir(tmp)
+	// under the token: a scan on demand may be making its copy in there
+	err = s.withTrivy(ctx, func() error {
+		entries, err := os.ReadDir(tmp)
+		if err != nil {
+			return err
+		}
+		for _, entry := range entries {
+			if err := os.RemoveAll(filepath.Join(tmp, entry.Name())); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 	if err != nil {
 		return "", err
-	}
-	for _, entry := range entries {
-		if err := os.RemoveAll(filepath.Join(tmp, entry.Name())); err != nil {
-			return "", err
-		}
 	}
 
 	return tmp, nil
@@ -256,10 +281,14 @@ func (s *Scanner) scan(ctx context.Context, tmp string, state *State, fail func(
 }
 
 func (s *Scanner) scanOne(ctx context.Context, image string, osOnly bool) (ImageResult, error) {
-	data, err := s.Trivy.Scan(ctx, image, osOnly)
+	run := func(osOnly bool) (data []byte, err error) {
+		err = s.withTrivy(ctx, func() (err error) { data, err = s.Trivy.Scan(ctx, image, osOnly); return })
+		return data, err
+	}
+	data, err := run(osOnly)
 	if err != nil && !osOnly && trivy.NeedsJavaDB([]byte(err.Error())) {
 		osOnly = true
-		data, err = s.Trivy.Scan(ctx, image, true)
+		data, err = run(true)
 	}
 	if err != nil {
 		return ImageResult{}, err
