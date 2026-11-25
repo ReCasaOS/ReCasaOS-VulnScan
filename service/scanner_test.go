@@ -32,6 +32,8 @@ type rig struct {
 	tmpErr     error
 	tmp        string
 	now        time.Time
+	imageSize  int64 // what ImageSize says of any image, unless sizeErr
+	sizeErr    error
 	block      chan struct{} // when set, a scan waits for it
 	entered    chan struct{} // when set, a scan says it began
 	*Scanner
@@ -44,14 +46,21 @@ func (r *rig) Containers(context.Context) ([]Container, error) {
 	return r.containers, r.dockerErr
 }
 func (r *rig) RootDir(context.Context) (string, error) { return "/var/lib/docker", nil }
-func (r *rig) DBUpdatedAt() (time.Time, error)         { return r.db, nil }
+func (r *rig) ImageSize(context.Context, string) (int64, error) {
+	return r.imageSize, r.sizeErr
+}
+func (r *rig) DBUpdatedAt() (time.Time, error) { return r.db, nil }
 
-func (r *rig) Scan(_ context.Context, image string, osOnly bool) ([]byte, error) {
+func (r *rig) Scan(ctx context.Context, image string, osOnly bool) ([]byte, error) {
 	if r.entered != nil {
 		r.entered <- struct{}{}
 	}
 	if r.block != nil {
-		<-r.block
+		select {
+		case <-r.block:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -73,7 +82,7 @@ func (r *rig) Scan(_ context.Context, image string, osOnly bool) ([]byte, error)
 
 func newRig(t *testing.T) *rig {
 	t.Helper()
-	r := &rig{t: t, reports: map[string]string{}, updates: map[string]bool{}, free: 1 << 40,
+	r := &rig{t: t, reports: map[string]string{}, updates: map[string]bool{}, free: 1 << 40, imageSize: 1 << 30,
 		db: time.Date(2026, 11, 23, 19, 0, 0, 0, time.UTC), now: time.Date(2026, 11, 24, 5, 30, 0, 0, time.UTC)}
 	tmp := t.TempDir()
 	r.tmp = tmp

@@ -79,6 +79,16 @@ func TestDockerContainers(t *testing.T) {
 	}
 }
 
+func TestDockerImageSize(t *testing.T) {
+	docker := dockerStub(t)
+	if size, err := docker.ImageSize(context.Background(), "sha256:aa"); err != nil || size != 310969164 {
+		t.Fatalf("%d, err %v", size, err)
+	}
+	if _, err := docker.ImageSize(context.Background(), "sha256:gone"); err == nil {
+		t.Fatal("no error for an image the daemon does not know")
+	}
+}
+
 func TestDockerRootDir(t *testing.T) {
 	if dir, err := dockerStub(t).RootDir(context.Background()); err != nil || dir != "/var/lib/docker" {
 		t.Fatalf("%q, err %v", dir, err)
