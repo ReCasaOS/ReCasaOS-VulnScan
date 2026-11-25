@@ -252,3 +252,30 @@ func TestCompareShape(t *testing.T) {
 		t.Fatalf("%d %s\nwant %s", code, body, want)
 	}
 }
+
+type ctxStub struct {
+	noScans
+	got *context.Context
+}
+
+func (s ctxStub) Compare(ctx context.Context, _, _ string) codegen.Comparison {
+	*s.got = ctx
+	return codegen.Comparison{Verdict: codegen.NotWorse, Added: []codegen.Finding{}}
+}
+
+// A caller who hangs up must stop the scan: the handler hands on the request's context.
+func TestCompareRoutePassesTheRequestContext(t *testing.T) {
+	box(t, "user", true)
+	var got context.Context
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	request := httptest.NewRequest(http.MethodPost, "/v2/vuln_scan/compare", strings.NewReader(compareBody)).WithContext(cancelled)
+	request.RemoteAddr = "127.0.0.1:40000"
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Authorization", "Internal s3cret")
+	InitV2Router(ctxStub{got: &got}).ServeHTTP(httptest.NewRecorder(), request)
+
+	if got == nil || got.Err() == nil {
+		t.Fatalf("the context given to Compare is %v, want the request's, cancelled", got)
+	}
+}
