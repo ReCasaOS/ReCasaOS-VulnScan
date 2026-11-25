@@ -107,6 +107,24 @@ func (a *API) App(name string) (codegen.AppDetail, bool) {
 	return detail, true
 }
 
+// Compare takes the request's context: a caller who hangs up stops the scan.
+func (a *API) Compare(ctx context.Context, current, candidate string) codegen.Comparison {
+	c := a.Scanner.Compare(ctx, current, candidate)
+
+	added := make([]codegen.Finding, 0, len(c.Added))
+	for _, f := range c.Added {
+		added = append(added, codegen.Finding{
+			Id: f.ID, Package: f.Package, Installed: f.Installed, Fixed: f.Fixed,
+			Severity: severity(f.Severity), Title: f.Title, Url: f.URL,
+		})
+	}
+
+	return codegen.Comparison{
+		Verdict: codegen.ComparisonVerdict(c.Verdict), CurrentCritical: c.CurrentCritical,
+		CandidateCritical: c.CandidateCritical, Added: added, Reason: c.Reason,
+	}
+}
+
 func severity(s string) codegen.FindingSeverity {
 	if s == trivy.Critical {
 		return codegen.CRITICAL
