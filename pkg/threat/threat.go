@@ -32,7 +32,11 @@ type KEVEntry struct {
 	Ransomware bool
 }
 
-const fileName = "threat.json.gz"
+// FileName is the copy on disk; Save writes FileName+".tmp*" first.
+const FileName = "threat.json.gz"
+
+// maxEPSSRows bounds the table (a variable so a test can lower it); the real file has ~300 000.
+var maxEPSSRows = 2_000_000
 
 // maxEPSSBytes caps the decompressed EPSS stream (a variable so a test can lower it).
 var maxEPSSBytes int64 = 200 << 20
@@ -157,6 +161,9 @@ func ParseEPSS(r io.Reader, minRows int) (map[string]float32, time.Time, error) 
 			continue
 		}
 		m[rec[0]] = float32(s)
+		if len(m) > maxEPSSRows {
+			return nil, time.Time{}, fmt.Errorf("epss: more than %d rows", maxEPSSRows)
+		}
 	}
 	if len(m) < minRows {
 		return nil, time.Time{}, fmt.Errorf("epss: %d rows, want at least %d", len(m), minRows)
@@ -166,7 +173,7 @@ func ParseEPSS(r io.Reader, minRows int) (map[string]float32, time.Time, error) 
 
 // Save writes dir/threat.json.gz through a temporary file in the same dir.
 func Save(dir string, l *Lists) error {
-	tmp, err := os.CreateTemp(dir, fileName+".tmp*")
+	tmp, err := os.CreateTemp(dir, FileName+".tmp*")
 	if err != nil {
 		return err
 	}
@@ -188,12 +195,12 @@ func Save(dir string, l *Lists) error {
 	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), filepath.Join(dir, fileName))
+	return os.Rename(tmp.Name(), filepath.Join(dir, FileName))
 }
 
 // Load returns an error wrapping os.ErrNotExist when nothing was saved.
 func Load(dir string) (*Lists, error) {
-	f, err := os.Open(filepath.Join(dir, fileName))
+	f, err := os.Open(filepath.Join(dir, FileName))
 	if err != nil {
 		return nil, err
 	}

@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -255,4 +256,57 @@ func TestStartThreatOnRuns(t *testing.T) {
 	}
 	cancel()
 	<-done
+}
+
+func TestRunRefreshesAStaleCopyAtStart(t *testing.T) {
+	f := newFeed()
+	th := newThreat(t, f)
+	if err := threat.Save(th.Dir, &threat.Lists{KEV: map[string]threat.KEVEntry{"CVE-2020-0001": {}}, KEVDate: threatNow.Add(-37 * time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); th.Run(ctx) }()
+	select {
+	case <-f.gotCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stale copy is not refreshed")
+	}
+	cancel()
+	<-done
+}
+
+func TestRunRemovesLeftoverTempFiles(t *testing.T) {
+	th := newThreat(t, newFeed())
+	if err := th.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	junk := filepath.Join(th.Dir, threat.FileName+".tmp123")
+	other := filepath.Join(th.Dir, "keep.tmp1")
+	for _, p := range []string{junk, other} {
+		if err := os.WriteFile(p, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); th.Run(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(junk); os.IsNotExist(err) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the leftover temp file stays")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	<-done
+	if _, err := os.Stat(other); err != nil {
+		t.Fatal("only the Save temp pattern may be removed")
+	}
+	if _, err := os.Stat(filepath.Join(th.Dir, threat.FileName)); err != nil {
+		t.Fatal("the copy itself stays")
+	}
 }

@@ -325,3 +325,17 @@ func TestParseEPSSStreamExactlyAtLimitPasses(t *testing.T) {
 		t.Fatal("one byte over must fail")
 	}
 }
+
+func TestParseEPSSRefusesATableOverTheRowLimit(t *testing.T) {
+	old := maxEPSSRows
+	maxEPSSRows = 3
+	defer func() { maxEPSSRows = old }()
+	head := "#model_version:v1,score_date:2026-11-25T12:00:23Z\ncve,epss,percentile\n"
+	rows := "CVE-2020-0001,0.1,0.2\nCVE-2020-0002,0.1,0.2\nCVE-2020-0003,0.1,0.2\n"
+	if _, _, err := ParseEPSS(bytes.NewReader(gz(t, head+rows)), 1); err != nil {
+		t.Fatalf("exactly at the limit must pass: %v", err)
+	}
+	if _, _, err := ParseEPSS(bytes.NewReader(gz(t, head+rows+"CVE-2020-0004,0.1,0.2\n")), 1); err == nil {
+		t.Fatal("want error past the row limit")
+	}
+}

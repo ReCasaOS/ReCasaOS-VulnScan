@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 const (
 	kevURL  = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
 	epssURL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+	// staleAfter: a copy older than this is refreshed at start (a box off or asleep at 05:00).
+	staleAfter = 36 * time.Hour
 	// listMax caps each download: the real files are a few MB.
 	listMax = 20 << 20
 )
@@ -97,10 +100,16 @@ func (t *Threat) download(ctx context.Context) (*threat.Lists, error) {
 	return &threat.Lists{KEV: kev, EPSS: epss, KEVDate: kevDate, EPSSDate: epssDate}, nil
 }
 
-// Run loads the copy on disk, downloads at once when there is none, then every day at
-// NextThreatRun until ctx ends.
+// Run loads the copy on disk, downloads at once when there is none or it is stale, then
+// every day at NextThreatRun until ctx ends. Temp files a power cut left in Dir are removed.
 // shortcut: a failed download waits for the next 05:00, no retry; add one if boxes stay stale
 func (t *Threat) Run(ctx context.Context) {
+	// the pattern threat.Save creates its temp files with
+	if old, _ := filepath.Glob(filepath.Join(t.Dir, threat.FileName+".tmp*")); len(old) > 0 {
+		for _, f := range old {
+			_ = os.Remove(f)
+		}
+	}
 	if l, err := threat.Load(t.Dir); err == nil {
 		t.mu.Lock()
 		t.lists = l
@@ -108,7 +117,7 @@ func (t *Threat) Run(ctx context.Context) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		logger.Error("the lists of exploited vulnerabilities on disk cannot be read", zap.Error(err))
 	}
-	if t.Lists() == nil {
+	if l := t.Lists(); l == nil || t.Now().Sub(l.KEVDate) > staleAfter {
 		t.refresh(ctx)
 	}
 	for {
