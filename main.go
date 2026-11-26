@@ -33,9 +33,6 @@ var (
 	commit = "private build"
 	date   = "private build"
 
-	//go:embed api/index.html
-	_docHTML string
-
 	//go:embed api/vuln_scan/openapi.yaml
 	_docYAML string
 
@@ -112,7 +109,7 @@ func main() {
 	mux := &util_http.HandlerMultiplexer{
 		HandlerMap: map[string]http.Handler{
 			"v2":  route.InitV2Router(api),
-			"doc": route.InitV2DocRouter(_docHTML, _docYAML),
+			"doc": route.InitV2DocRouter(_docYAML),
 		},
 	}
 
