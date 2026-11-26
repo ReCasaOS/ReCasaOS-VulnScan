@@ -765,3 +765,20 @@ func TestPassForgetsExploitedOfRemovedApps(t *testing.T) {
 		t.Fatalf("told exploited %v", state.ToldExploited)
 	}
 }
+
+// A critical told as exploited is never told again as found: the owner was told the stronger
+// thing, and the list going away (turned off, not loaded yet) changes nothing on the box.
+func TestToldAsExploitedIsNotToldAgainWhenTheListGoes(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("CRITICAL CVE-2024-0001")
+	r.updates["a"] = true
+	r.lists = kevLists([]string{"CVE-2024-0001"}, nil)
+	r.pass()
+	r.lists = nil
+	r.pass()
+
+	if !reflect.DeepEqual(r.events, []string{EventExploited}) {
+		t.Fatalf("events %v, published %v", r.events, r.published)
+	}
+}

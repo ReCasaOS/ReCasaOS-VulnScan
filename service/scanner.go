@@ -380,6 +380,11 @@ func (s *Scanner) tell(ctx context.Context, state *State) {
 	}
 
 	s.announce(EventExploited, exploitedIDs, state.ToldExploited, updates)
+	// told as exploited, the owner knows the stronger thing: a list that goes away (turned
+	// off, not loaded yet) or drops the id does not tell it again as found
+	for name, ids := range critical {
+		critical[name] = slices.DeleteFunc(ids, func(id string) bool { return slices.Contains(state.ToldExploited[name], id) })
+	}
 	s.announce(EventFound, critical, state.Told, updates)
 }
 
