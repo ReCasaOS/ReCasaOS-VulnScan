@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -29,11 +30,21 @@ type propertyTypeJSON struct {
 	Name string `json:"name"`
 }
 
-// Register makes EventFound discoverable on the message bus, which the core's alerts
-// subscribe to. Registering it again after a restart is answered 409, which is fine.
+// Register makes EventFound and EventExploited discoverable on the message bus, which the
+// core's alerts subscribe to. Registering one again after a restart is answered 409, which is
+// fine. Each is sent on its own: a 409 on one must not keep the other out.
 func (e Events) Register(ctx context.Context) error {
+	var errs []error
+	for _, name := range []string{EventFound, EventExploited} {
+		errs = append(errs, e.register(ctx, name))
+	}
+
+	return errors.Join(errs...)
+}
+
+func (e Events) register(ctx context.Context, name string) error {
 	payload, err := json.Marshal([]eventTypeJSON{{
-		SourceID: common.ServiceName, Name: EventFound,
+		SourceID: common.ServiceName, Name: name,
 		PropertyTypeList: []propertyTypeJSON{{Name: "apps"}, {Name: "count"}},
 	}})
 	if err != nil {
@@ -65,7 +76,7 @@ func (e Events) Register(ctx context.Context) error {
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusConflict {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("message bus answered %s: %s", resp.Status, msg)
+		return fmt.Errorf("message bus answered %s to %s: %s", resp.Status, name, msg)
 	}
 
 	return nil

@@ -83,6 +83,8 @@ func main() {
 			return threat.Fetch(ctx, client, url, max)
 		},
 	}
+	// turned off, the lists are never loaded: Lists stays nil and the scan is what it was
+	scanner.Threat = lists.Lists
 	if config.ThreatInfo.Enabled {
 		api.Threat = lists
 	}

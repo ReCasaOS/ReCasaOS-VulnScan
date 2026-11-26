@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/codegen"
+	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/threat"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/trivy"
 )
 
@@ -74,14 +75,19 @@ func (a *API) offered() map[string]bool {
 
 func (a *API) Apps() []codegen.AppSummary {
 	state, images := a.Scanner.Snapshot()
-	summaries := Summaries(images, state, a.offered())
+	summaries := Summaries(images, state, a.offered(), a.Scanner.lists())
 
 	apps := make([]codegen.AppSummary, 0, len(summaries))
 	for _, s := range summaries {
-		apps = append(apps, codegen.AppSummary{
-			App: s.App, Loose: s.Loose, Critical: s.Critical, High: s.High, Actionable: s.Actionable,
+		app := codegen.AppSummary{
+			App: s.App, Loose: s.Loose, Critical: s.Critical, High: s.High, Exploited: s.Exploited, Actionable: s.Actionable,
 			OsOnly: s.OSOnly, ScannedAt: timeOrNil(s.ScannedAt), Skipped: s.Skipped,
-		})
+		}
+		// shortcut: a known score of exactly 0 is left out like an unknown one; real EPSS scores are above 0
+		if s.EPSSMax > 0 {
+			app.EpssMax = &s.EPSSMax
+		}
+		apps = append(apps, app)
 	}
 
 	return apps
@@ -94,14 +100,12 @@ func (a *API) App(name string) (codegen.AppDetail, bool) {
 		return codegen.AppDetail{}, false
 	}
 
+	lists := a.Scanner.lists()
 	detail := codegen.AppDetail{App: name, Images: make([]codegen.ImageFindings, 0, len(byImage))}
 	for id, result := range byImage {
 		findings := make([]codegen.Finding, 0, len(result.Findings))
 		for _, f := range result.Findings {
-			findings = append(findings, codegen.Finding{
-				Id: f.ID, Package: f.Package, Installed: f.Installed, Fixed: f.Fixed,
-				Severity: severity(f.Severity), Title: f.Title, Url: f.URL,
-			})
+			findings = append(findings, apiFinding(f, lists))
 		}
 		detail.Images = append(detail.Images, codegen.ImageFindings{
 			ImageId: id, OsOnly: result.OSOnly, Skipped: result.Skipped, ScannedAt: timeOrNil(result.ScannedAt), Findings: findings,
@@ -121,18 +125,29 @@ func (a *API) App(name string) (codegen.AppDetail, bool) {
 func (a *API) Compare(ctx context.Context, current, candidate string) codegen.Comparison {
 	c := a.Scanner.Compare(ctx, current, candidate)
 
+	lists := a.Scanner.lists()
 	added := make([]codegen.Finding, 0, len(c.Added))
 	for _, f := range c.Added {
-		added = append(added, codegen.Finding{
-			Id: f.ID, Package: f.Package, Installed: f.Installed, Fixed: f.Fixed,
-			Severity: severity(f.Severity), Title: f.Title, Url: f.URL,
-		})
+		added = append(added, apiFinding(f, lists))
 	}
 
 	return codegen.Comparison{
 		Verdict: codegen.ComparisonVerdict(c.Verdict), CurrentCritical: c.CurrentCritical,
 		CandidateCritical: c.CandidateCritical, Added: added, Reason: c.Reason,
 	}
+}
+
+// apiFinding is f in the words of the API, with what the lists in use say of it.
+func apiFinding(f trivy.Finding, lists *threat.Lists) codegen.Finding {
+	finding := codegen.Finding{
+		Id: f.ID, Package: f.Package, Installed: f.Installed, Fixed: f.Fixed,
+		Severity: severity(f.Severity), Exploited: exploited(lists, f.ID), Title: f.Title, Url: f.URL,
+	}
+	if s, known := score(lists, f.ID); known {
+		finding.Epss = &s
+	}
+
+	return finding
 }
 
 func severity(s string) codegen.FindingSeverity {

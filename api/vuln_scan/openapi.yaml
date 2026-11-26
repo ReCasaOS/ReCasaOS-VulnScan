@@ -198,7 +198,7 @@ components:
 
     AppSummary:
       type: object
-      required: [app, loose, critical, high, actionable, os_only, skipped]
+      required: [app, loose, critical, high, exploited, actionable, os_only, skipped]
       properties:
         app:
           type: string
@@ -210,9 +210,16 @@ components:
           type: integer
         high:
           type: integer
+        exploited:
+          type: integer
+          description: how many of its vulnerabilities (critical or high) attackers already exploit, by the CISA list (KEV)
+        epss_max:
+          type: number
+          format: float
+          description: the highest probability of exploitation (EPSS, 0 to 1) among its vulnerabilities; absent when none is known
         actionable:
           type: boolean
-          description: a critical vulnerability, and an update of the app is offered
+          description: a critical vulnerability, or a high one attackers exploit, and an update of the app is offered
         os_only:
           type: boolean
           description: the Java libraries of an image were not checked
@@ -254,7 +261,7 @@ components:
 
     Finding:
       type: object
-      required: [id, package, installed, fixed, severity, title, url]
+      required: [id, package, installed, fixed, severity, exploited, title, url]
       properties:
         id:
           type: string
@@ -268,6 +275,13 @@ components:
         severity:
           type: string
           enum: [CRITICAL, HIGH]
+        exploited:
+          type: boolean
+          description: attackers already exploit it, by the CISA list (KEV)
+        epss:
+          type: number
+          format: float
+          description: the probability of its exploitation in the next 30 days (EPSS, 0 to 1); absent when not known
         title:
           type: string
         url:

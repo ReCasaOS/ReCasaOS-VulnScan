@@ -13,14 +13,20 @@ import (
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/threat"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/trivy"
 	"go.uber.org/zap"
 )
 
-// EventFound is published once at the end of a pass that found a critical vulnerability not
-// told yet in an app an update is offered for. Its properties: "apps", the names joined by
-// ", ", and "count", how many such vulnerabilities there are in all.
+// EventFound is published once at the end of a pass that found a critical vulnerability, that
+// attackers are not known to exploit, not told yet in an app an update is offered for. Its
+// properties: "apps", the names joined by ", ", and "count", how many such vulnerabilities
+// there are in all.
 const EventFound = "vuln:found"
+
+// EventExploited is EventFound for the vulnerabilities (critical or high) attackers already
+// exploit, by the lists in use. A vulnerability told by it is not told by EventFound.
+const EventExploited = "vuln:exploited"
 
 var ErrRunning = errors.New("a scan is already running")
 
@@ -47,6 +53,9 @@ type Scanner struct {
 	Updates func(ctx context.Context) (map[string]bool, error)
 	// Free is the room left in a folder, in bytes.
 	Free func(dir string) (uint64, error)
+	// Threat is the lists of exploited vulnerabilities in use; nil, or nil lists, when there
+	// are none.
+	Threat func() *threat.Lists
 	// Publish sends an event to the message bus.
 	Publish func(name string, properties map[string]string) error
 	Now     func() time.Time
@@ -106,7 +115,7 @@ func (s *Scanner) Snapshot() (State, []Image) {
 	defer s.mu.Unlock()
 
 	state := s.state
-	state.Images, state.Told = maps.Clone(s.state.Images), maps.Clone(s.state.Told)
+	state.Images, state.Told, state.ToldExploited = maps.Clone(s.state.Images), maps.Clone(s.state.Told), maps.Clone(s.state.ToldExploited)
 
 	return state, slices.Clone(s.state.Inventory)
 }
@@ -149,7 +158,7 @@ func (s *Scanner) begin() bool {
 func (s *Scanner) run(ctx context.Context) {
 	s.mu.Lock()
 	state := s.state
-	state.Images, state.Told = maps.Clone(s.state.Images), maps.Clone(s.state.Told)
+	state.Images, state.Told, state.ToldExploited = maps.Clone(s.state.Images), maps.Clone(s.state.Told), maps.Clone(s.state.ToldExploited)
 	s.mu.Unlock()
 
 	state.LastError = ""
@@ -314,37 +323,54 @@ func forget(state *State) {
 		}
 	}
 	maps.DeleteFunc(state.Images, func(id string, _ ImageResult) bool { return !ids[id] })
-	maps.DeleteFunc(state.Told, func(name string, _ []string) bool { return !apps[name] })
+	gone := func(name string, _ []string) bool { return !apps[name] }
+	maps.DeleteFunc(state.Told, gone)
+	maps.DeleteFunc(state.ToldExploited, gone)
 }
 
-// criticalByApp is the ids of the critical vulnerabilities of each app, sorted. A container
-// that belongs to no app is not in it.
-func criticalByApp(images []Image, state State) map[string][]string {
-	critical := map[string][]string{}
+// lists is the lists of exploited vulnerabilities in use; nil when there are none.
+func (s *Scanner) lists() *threat.Lists {
+	if s.Threat == nil {
+		return nil
+	}
+	return s.Threat()
+}
+
+// byApp is, by app, the ids of the vulnerabilities (critical or high) attackers exploit, and
+// of the critical ones they are not known to exploit, sorted. A container that belongs to no
+// app is not in them.
+func byApp(images []Image, state State, lists *threat.Lists) (exploitedIDs, critical map[string][]string) {
+	exploitedIDs, critical = map[string][]string{}, map[string][]string{}
 	for _, image := range images {
 		for _, finding := range state.Images[image.ID].Findings {
-			if finding.Severity != trivy.Critical {
+			to := critical
+			if exploited(lists, finding.ID) {
+				to = exploitedIDs
+			} else if finding.Severity != trivy.Critical {
 				continue
 			}
 			for _, name := range image.Apps {
-				critical[name] = append(critical[name], finding.ID)
+				to[name] = append(to[name], finding.ID)
 			}
 		}
 	}
-	for name, ids := range critical {
-		slices.Sort(ids)
-		critical[name] = slices.Compact(ids)
+	for _, ids := range []map[string][]string{exploitedIDs, critical} {
+		for name := range ids {
+			slices.Sort(ids[name])
+			ids[name] = slices.Compact(ids[name])
+		}
 	}
 
-	return critical
+	return exploitedIDs, critical
 }
 
-// tell publishes EventFound for the critical vulnerabilities not told yet of the apps an
-// update is offered for: there is something to do about those. When the updates cannot be
-// read nothing is told and nothing is noted, and the next pass tries again.
+// tell publishes EventExploited, then EventFound, for the vulnerabilities each event has not
+// told yet of the apps an update is offered for: there is something to do about those. When
+// the updates cannot be read nothing is told and nothing is noted, and the next pass tries
+// again.
 func (s *Scanner) tell(ctx context.Context, state *State) {
-	critical := criticalByApp(state.Inventory, *state)
-	if len(critical) == 0 {
+	exploitedIDs, critical := byApp(state.Inventory, *state, s.lists())
+	if len(exploitedIDs) == 0 && len(critical) == 0 {
 		return
 	}
 	updates, err := s.Updates(ctx)
@@ -353,15 +379,22 @@ func (s *Scanner) tell(ctx context.Context, state *State) {
 		return
 	}
 
+	s.announce(EventExploited, exploitedIDs, state.ToldExploited, updates)
+	s.announce(EventFound, critical, state.Told, updates)
+}
+
+// announce publishes event once for the ids of byApp not in told, of the apps an update is
+// offered for, and notes them in told once the bus took it.
+func (s *Scanner) announce(event string, byApp, told map[string][]string, updates map[string]bool) {
 	var names []string
 	fresh := map[string][]string{}
 	count := 0
-	for name, ids := range critical {
+	for name, ids := range byApp {
 		if !updates[name] {
 			continue
 		}
 		for _, id := range ids {
-			if !slices.Contains(state.Told[name], id) {
+			if !slices.Contains(told[name], id) {
 				fresh[name] = append(fresh[name], id)
 			}
 		}
@@ -375,12 +408,12 @@ func (s *Scanner) tell(ctx context.Context, state *State) {
 	}
 
 	slices.Sort(names)
-	if err := s.Publish(EventFound, map[string]string{"apps": strings.Join(names, ", "), "count": strconv.Itoa(count)}); err != nil {
+	if err := s.Publish(event, map[string]string{"apps": strings.Join(names, ", "), "count": strconv.Itoa(count)}); err != nil {
 		// not noted as told: the next pass tells it
-		logger.Error("the vulnerabilities found could not be announced", zap.Error(err))
+		logger.Error("the vulnerabilities found could not be announced", zap.String("event", event), zap.Error(err))
 		return
 	}
 	for name, ids := range fresh {
-		state.Told[name] = append(state.Told[name], ids...)
+		told[name] = append(told[name], ids...)
 	}
 }

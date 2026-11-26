@@ -36,10 +36,13 @@ type State struct {
 	Inventory []Image
 	// Images are the results, by image id.
 	Images map[string]ImageResult
-	// Told are the ids of the critical vulnerabilities already announced, by app.
-	Told      map[string][]string
-	LastRun   time.Time
-	LastError string
+	// Told are the ids of the critical vulnerabilities already announced by EventFound, by app.
+	Told map[string][]string
+	// ToldExploited are the ids of the exploited vulnerabilities (critical or high) already
+	// announced as exploited, by app.
+	ToldExploited map[string][]string
+	LastRun       time.Time
+	LastError     string
 }
 
 const stateFile = "state.json"
@@ -64,6 +67,9 @@ func Load(dir string) State {
 	}
 	if state.Told == nil {
 		state.Told = map[string][]string{}
+	}
+	if state.ToldExploited == nil {
+		state.ToldExploited = map[string][]string{} // a file kept before the lists has none
 	}
 
 	return state

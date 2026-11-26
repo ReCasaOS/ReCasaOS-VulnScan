@@ -203,7 +203,7 @@ func TestGetAppUnknown(t *testing.T) {
 // The words of the API, as the dashboard reads them.
 func TestAppsShape(t *testing.T) {
 	code, body := ask(t, scansStub{}, http.MethodGet, "/v2/vuln_scan/apps")
-	want := `{"data":[{"actionable":true,"app":"vaultwarden","critical":4,"high":117,"loose":false,"os_only":false,"skipped":""}]}`
+	want := `{"data":[{"actionable":true,"app":"vaultwarden","critical":4,"exploited":0,"high":117,"loose":false,"os_only":false,"skipped":""}]}`
 	if code != http.StatusOK || body != want {
 		t.Fatalf("%d %s\nwant %s", code, body, want)
 	}

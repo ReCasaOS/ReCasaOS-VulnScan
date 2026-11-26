@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -127,5 +129,46 @@ func TestAPICompareSpeaksTheAPIsWords(t *testing.T) {
 	// no finding is an empty list, not null: the caller reads its length
 	if got := newAPI(r).Compare(context.Background(), "cand", "cur"); got.Verdict != "not_worse" || got.Added == nil {
 		t.Fatalf("%+v", got)
+	}
+}
+
+// exploited and epss are read from the lists in use; an unknown score is absent, not 0.
+func TestAPIFindingCarriesExploitedAndEPSS(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("HIGH CVE-2024-0001", "CRITICAL CVE-2024-0002")
+	r.updates["a"] = true
+	r.pass()
+	r.lists = kevLists([]string{"CVE-2024-0001"}, map[string]float32{"CVE-2024-0001": 0.5})
+	api := newAPI(r)
+
+	detail, _ := api.App("a")
+	data, err := json.Marshal(detail.Images[0].Findings)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list []map[string]any
+	if err := json.Unmarshal(data, &list); err != nil {
+		t.Fatal(err)
+	}
+	byID := map[string]map[string]any{}
+	for _, f := range list {
+		byID[f["id"].(string)] = f
+	}
+	high, critical := byID["CVE-2024-0001"], byID["CVE-2024-0002"]
+	if len(list) != 2 || high["exploited"] != true || high["epss"] != 0.5 || critical["exploited"] != false {
+		t.Fatalf("%s", data)
+	}
+	if _, there := critical["epss"]; there {
+		t.Fatalf("%s: epss of an unknown score", data)
+	}
+
+	apps := api.Apps()
+	if len(apps) != 1 || apps[0].Exploited != 1 || apps[0].EpssMax == nil || *apps[0].EpssMax != 0.5 || !apps[0].Actionable {
+		t.Fatalf("%+v", apps)
+	}
+	r.lists = nil
+	if data, _ := json.Marshal(api.Apps()); !strings.Contains(string(data), `"exploited":0`) || strings.Contains(string(data), "epss_max") {
+		t.Fatalf("%s: want exploited 0 and no epss_max without lists", data)
 	}
 }
