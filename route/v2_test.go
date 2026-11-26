@@ -211,7 +211,7 @@ func TestAppsShape(t *testing.T) {
 
 func TestStatusShape(t *testing.T) {
 	code, body := ask(t, scansStub{}, http.MethodGet, "/v2/vuln_scan/status")
-	if want := `{"data":{"last_error":"","running":false}}`; code != http.StatusOK || body != want {
+	if want := `{"data":{"last_error":"","running":false,"threat_error":""}}`; code != http.StatusOK || body != want {
 		t.Fatalf("%d %s\nwant %s", code, body, want)
 	}
 }

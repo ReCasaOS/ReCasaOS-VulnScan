@@ -173,7 +173,7 @@ components:
 
     Status:
       type: object
-      required: [running, last_error]
+      required: [running, last_error, threat_error]
       properties:
         running:
           type: boolean
@@ -188,6 +188,13 @@ components:
           type: string
           format: date-time
           description: the date of the vulnerability database; absent before the first download
+        threat_updated_at:
+          type: string
+          format: date-time
+          description: the date of the list of exploited vulnerabilities (CISA KEV) in use; absent without a list
+        threat_error:
+          type: string
+          description: why the last download of the lists failed; empty when it did not
 
     AppSummary:
       type: object

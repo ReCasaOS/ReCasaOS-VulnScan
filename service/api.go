@@ -21,6 +21,8 @@ type API struct {
 	DB func() (time.Time, error)
 	// Ctx is the service's: a scan started by a request outlives the request.
 	Ctx context.Context
+	// Threat holds the lists of exploited vulnerabilities; nil when they are turned off.
+	Threat *Threat
 
 	mu        sync.Mutex
 	updates   map[string]bool
@@ -38,7 +40,15 @@ func (a *API) Status() codegen.Status {
 	state, _ := a.Scanner.Snapshot()
 	db, _ := a.DB()
 
-	return codegen.Status{Running: a.Scanner.Running(), LastRun: timeOrNil(state.LastRun), LastError: state.LastError, DbUpdatedAt: timeOrNil(db)}
+	status := codegen.Status{Running: a.Scanner.Running(), LastRun: timeOrNil(state.LastRun), LastError: state.LastError, DbUpdatedAt: timeOrNil(db)}
+	if a.Threat != nil {
+		if l := a.Threat.Lists(); l != nil {
+			status.ThreatUpdatedAt = timeOrNil(l.KEVDate)
+		}
+		status.ThreatError = a.Threat.LastError()
+	}
+
+	return status
 }
 
 func (a *API) Start() bool {

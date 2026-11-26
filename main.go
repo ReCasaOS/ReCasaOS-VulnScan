@@ -21,6 +21,7 @@ import (
 	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/common"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/config"
+	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/threat"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/route"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/service"
 	"github.com/coreos/go-systemd/daemon"
@@ -75,6 +76,18 @@ func main() {
 	scanner, runner := newScanner(events, docker)
 	api := &service.API{Scanner: scanner, DB: runner.DBUpdatedAt, Ctx: ctx}
 
+	var lists *service.Threat
+	if config.ThreatInfo.Enabled {
+		client := &http.Client{Timeout: 2 * time.Minute}
+		lists = &service.Threat{
+			Dir: config.AppInfo.StatePath, Now: time.Now, MinKEV: 500, MinEPSS: 100_000,
+			Get: func(ctx context.Context, url string, max int64) ([]byte, error) {
+				return threat.Fetch(ctx, client, url, max)
+			},
+		}
+		api.Threat = lists
+	}
+
 	// setup listener
 	listener, err := net.Listen("tcp", net.JoinHostPort(common.Localhost, "0"))
 	if err != nil {
@@ -117,6 +130,14 @@ func main() {
 	go func() {
 		defer close(nightly)
 		scanner.RunNightly(ctx)
+	}()
+
+	listing := make(chan struct{})
+	go func() {
+		defer close(listing)
+		if lists != nil {
+			lists.Run(ctx)
+		}
 	}()
 
 	following := make(chan struct{})
@@ -162,6 +183,7 @@ func main() {
 	cancel()
 	<-nightly
 	<-following
+	<-listing
 }
 
 // newScanner wires the scanner to the box: Docker's socket, the Trivy the archive ships, and

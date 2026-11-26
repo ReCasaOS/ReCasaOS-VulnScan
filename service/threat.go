@@ -1,0 +1,124 @@
+package service
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"fmt"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/ReCasaOS/CasaOS-Common/utils/logger"
+	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/threat"
+	"go.uber.org/zap"
+)
+
+const (
+	kevURL  = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+	epssURL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
+	// listMax caps each download: the real files are a few MB.
+	listMax = 20 << 20
+)
+
+// NextThreatRun is the next 05:00 on the box's clock: the lists are in place before the 05:30 scan.
+func NextThreatRun(now time.Time) time.Time {
+	return nextAt(now, 5, 0)
+}
+
+// Threat keeps the lists of exploited vulnerabilities fresh: in memory and in Dir.
+type Threat struct {
+	Dir string
+	Get func(ctx context.Context, url string, max int64) ([]byte, error)
+	Now func() time.Time
+	// MinKEV and MinEPSS refuse a list that came back too small to be the real one.
+	MinKEV, MinEPSS int
+
+	mu      sync.RWMutex
+	lists   *threat.Lists
+	lastErr string
+}
+
+// Lists is the copy in use; nil when there is none yet.
+func (t *Threat) Lists() *threat.Lists {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.lists
+}
+
+func (t *Threat) LastError() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.lastErr
+}
+
+// Refresh downloads both lists. Only two valid lists replace the copy in use and the one on
+// disk; otherwise the old copy stays and the error is kept for the status.
+func (t *Threat) Refresh(ctx context.Context) error {
+	l, err := t.download(ctx)
+	if err == nil {
+		err = threat.Save(t.Dir, l)
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err != nil {
+		t.lastErr = err.Error()
+		return err
+	}
+	t.lists, t.lastErr = l, ""
+
+	return nil
+}
+
+func (t *Threat) download(ctx context.Context) (*threat.Lists, error) {
+	kevBody, err := t.Get(ctx, kevURL, listMax)
+	if err != nil {
+		return nil, fmt.Errorf("kev: %w", err)
+	}
+	kev, kevDate, err := threat.ParseKEV(bytes.NewReader(kevBody), t.MinKEV)
+	if err != nil {
+		return nil, err
+	}
+
+	epssBody, err := t.Get(ctx, epssURL, listMax)
+	if err != nil {
+		return nil, fmt.Errorf("epss: %w", err)
+	}
+	epss, epssDate, err := threat.ParseEPSS(bytes.NewReader(epssBody), t.MinEPSS)
+	if err != nil {
+		return nil, err
+	}
+
+	return &threat.Lists{KEV: kev, EPSS: epss, KEVDate: kevDate, EPSSDate: epssDate}, nil
+}
+
+// Run loads the copy on disk, downloads at once when there is none, then every day at
+// NextThreatRun until ctx ends.
+// shortcut: a failed download waits for the next 05:00, no retry; add one if boxes stay stale
+func (t *Threat) Run(ctx context.Context) {
+	if l, err := threat.Load(t.Dir); err == nil {
+		t.mu.Lock()
+		t.lists = l
+		t.mu.Unlock()
+	} else if !errors.Is(err, os.ErrNotExist) {
+		logger.Error("the lists of exploited vulnerabilities on disk cannot be read", zap.Error(err))
+	}
+	if t.Lists() == nil {
+		t.refresh(ctx)
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(NextThreatRun(t.Now()).Sub(t.Now())):
+		}
+		t.refresh(ctx)
+	}
+}
+
+func (t *Threat) refresh(ctx context.Context) {
+	if err := t.Refresh(ctx); err != nil && ctx.Err() == nil {
+		logger.Error("the lists of exploited vulnerabilities were not updated", zap.Error(err))
+	}
+}

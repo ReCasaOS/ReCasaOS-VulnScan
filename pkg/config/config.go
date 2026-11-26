@@ -28,12 +28,20 @@ type APPModel struct {
 	TrivyPath string
 }
 
+// ThreatModel is the daily download of the lists of exploited vulnerabilities (CISA KEV, EPSS).
+type ThreatModel struct {
+	Enabled bool
+}
+
 var (
 	ConfigFilePath = filepath.Join(constants.DefaultConfigPath, "vuln-scan.conf")
 
 	CommonInfo = &CommonModel{
 		RuntimePath: constants.DefaultRuntimePath,
 	}
+
+	// on unless the file says otherwise, so an older file without [threat] keeps it
+	ThreatInfo = &ThreatModel{Enabled: true}
 
 	AppInfo = &APPModel{
 		LogPath:     constants.DefaultLogPath,
@@ -63,7 +71,7 @@ func InitSetup(config string, sample string) {
 		panic(err)
 	}
 
-	for section, v := range map[string]interface{}{"common": CommonInfo, "app": AppInfo} {
+	for section, v := range map[string]interface{}{"common": CommonInfo, "app": AppInfo, "threat": ThreatInfo} {
 		if err := cfg.Section(section).MapTo(v); err != nil {
 			log.Fatalf("Cfg.MapTo %s err: %v", section, err)
 		}
