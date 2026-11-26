@@ -266,3 +266,62 @@ func TestEPSSTableMemory(t *testing.T) {
 	}
 	runtime.KeepAlive(m)
 }
+
+func TestFetchSendsOurUserAgentOnEveryHop(t *testing.T) {
+	var agents []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/a", func(w http.ResponseWriter, r *http.Request) {
+		agents = append(agents, r.UserAgent())
+		http.Redirect(w, r, "/b", http.StatusFound)
+	})
+	mux.HandleFunc("/b", func(w http.ResponseWriter, r *http.Request) {
+		agents = append(agents, r.UserAgent())
+		w.Write([]byte("ok"))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	if _, err := Fetch(context.Background(), srv.Client(), srv.URL+"/a", 10); err != nil {
+		t.Fatal(err)
+	}
+	if len(agents) != 2 || agents[0] != "ReCasaOS-VulnScan" || agents[1] != "ReCasaOS-VulnScan" {
+		t.Fatalf("agents %v", agents)
+	}
+}
+
+func TestFetchRefusesSchemeDowngrade(t *testing.T) {
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "http://"+r.Host+"/x", http.StatusFound)
+	}))
+	defer srv.Close()
+	if _, err := Fetch(context.Background(), srv.Client(), srv.URL, 10); err == nil || !strings.Contains(err.Error(), "another origin") {
+		t.Fatalf("want origin error, got %v", err)
+	}
+}
+
+func TestParseEPSSSkipsNaNAndSaveWorks(t *testing.T) {
+	body := "#model_version:v1,score_date:2026-11-25T12:00:23Z\ncve,epss,percentile\nCVE-2024-0001,NaN,0.1\nCVE-2024-0002,+Inf,0.1\nCVE-2024-0003,0.5,0.1\n"
+	m, date, err := ParseEPSS(bytes.NewReader(gz(t, body)), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m) != 1 {
+		t.Fatalf("NaN and Inf rows must be skipped: %v", m)
+	}
+	if err := Save(t.TempDir(), &Lists{EPSS: m, EPSSDate: date}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseEPSSStreamExactlyAtLimitPasses(t *testing.T) {
+	body := "#model_version:v1,score_date:2026-11-25T12:00:23Z\ncve,epss,percentile\nCVE-2020-0001,0.1,0.2\n"
+	old := maxEPSSBytes
+	defer func() { maxEPSSBytes = old }()
+	maxEPSSBytes = int64(len(body))
+	if _, _, err := ParseEPSS(bytes.NewReader(gz(t, body)), 1); err != nil {
+		t.Fatalf("exact limit must pass: %v", err)
+	}
+	maxEPSSBytes--
+	if _, _, err := ParseEPSS(bytes.NewReader(gz(t, body)), 1); err == nil {
+		t.Fatal("one byte over must fail")
+	}
+}

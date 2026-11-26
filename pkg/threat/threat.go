@@ -92,8 +92,13 @@ type limitReader struct {
 }
 
 func (l *limitReader) Read(p []byte) (int, error) {
-	if l.n <= 0 {
-		return 0, errors.New("epss: decompressed data over the limit")
+	if l.n <= 0 { // at the limit: fine if the stream ends here, an error if more follows
+		var b [1]byte
+		n, err := l.r.Read(b[:])
+		if n > 0 {
+			return 0, errors.New("epss: decompressed data over the limit")
+		}
+		return 0, err
 	}
 	if int64(len(p)) > l.n {
 		p = p[:l.n]
@@ -148,7 +153,7 @@ func ParseEPSS(r io.Reader, minRows int) (map[string]float32, time.Time, error) 
 			continue
 		}
 		s, err := strconv.ParseFloat(rec[1], 32)
-		if err != nil || s < 0 || s > 1 {
+		if err != nil || !(s >= 0 && s <= 1) { // also refuses NaN and Inf, which JSON cannot hold
 			continue
 		}
 		m[rec[0]] = float32(s)
@@ -170,6 +175,9 @@ func Save(dir string, l *Lists) error {
 	err = json.NewEncoder(zw).Encode(l)
 	if cerr := zw.Close(); err == nil {
 		err = cerr
+	}
+	if serr := tmp.Sync(); err == nil {
+		err = serr
 	}
 	if cerr := tmp.Close(); err == nil {
 		err = cerr
@@ -211,8 +219,8 @@ func Fetch(ctx context.Context, c *http.Client, url string, max int64) ([]byte, 
 		if len(via) > 1 {
 			return errors.New("fetch: more than one redirect")
 		}
-		if req.URL.Host != via[0].URL.Host {
-			return fmt.Errorf("fetch: redirect to another host (%s)", req.URL.Host)
+		if req.URL.Host != via[0].URL.Host || req.URL.Scheme != via[0].URL.Scheme {
+			return fmt.Errorf("fetch: redirect to another origin (%s://%s)", req.URL.Scheme, req.URL.Host)
 		}
 		return nil
 	}
@@ -220,6 +228,7 @@ func Fetch(ctx context.Context, c *http.Client, url string, max int64) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
+	req.Header.Set("User-Agent", "ReCasaOS-VulnScan")
 	resp, err := cc.Do(req)
 	if err != nil {
 		return nil, err
