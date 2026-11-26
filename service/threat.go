@@ -57,7 +57,10 @@ func (t *Threat) LastError() string {
 func (t *Threat) Refresh(ctx context.Context) error {
 	l, err := t.download(ctx)
 	if err == nil {
-		err = threat.Save(t.Dir, l)
+		// the scanner creates it too, but not necessarily before the first refresh
+		if err = os.MkdirAll(t.Dir, 0o700); err == nil {
+			err = threat.Save(t.Dir, l)
+		}
 	}
 
 	t.mu.Lock()
@@ -77,6 +80,7 @@ func (t *Threat) download(ctx context.Context) (*threat.Lists, error) {
 		return nil, fmt.Errorf("kev: %w", err)
 	}
 	kev, kevDate, err := threat.ParseKEV(bytes.NewReader(kevBody), t.MinKEV)
+	kevBody = nil // not held while EPSS downloads
 	if err != nil {
 		return nil, err
 	}
@@ -108,13 +112,32 @@ func (t *Threat) Run(ctx context.Context) {
 		t.refresh(ctx)
 	}
 	for {
+		now := t.Now()
+		timer := time.NewTimer(NextThreatRun(now).Sub(now))
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(NextThreatRun(t.Now()).Sub(t.Now())):
+		case <-timer.C:
 		}
 		t.refresh(ctx)
 	}
+}
+
+// StartThreat runs t in the background when enabled; the channel closes when it has stopped
+// (at once when disabled, which downloads nothing).
+func StartThreat(ctx context.Context, enabled bool, t *Threat) <-chan struct{} {
+	done := make(chan struct{})
+	if !enabled {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		t.Run(ctx)
+	}()
+
+	return done
 }
 
 func (t *Threat) refresh(ctx context.Context) {

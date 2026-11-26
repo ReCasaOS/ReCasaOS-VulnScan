@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"context"
 	"errors"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -219,11 +220,39 @@ func TestStatusSaysTheListDateAndError(t *testing.T) {
 	}
 }
 
-// Enabled=false means main never starts Run: Get is never called and Lists() stays nil.
-func TestThreatOffByConfig(t *testing.T) {
+func TestRefreshCreatesItsFolder(t *testing.T) {
+	th := newThreat(t, newFeed())
+	th.Dir = filepath.Join(th.Dir, "not", "yet")
+	if err := th.Refresh(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := threat.Load(th.Dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartThreatOffDoesNothing(t *testing.T) {
 	f := newFeed()
 	th := newThreat(t, f)
-	if f.count() != 0 || th.Lists() != nil {
-		t.Fatal("a Threat nobody runs does nothing")
+	select {
+	case <-StartThreat(context.Background(), false, th):
+	case <-time.After(5 * time.Second):
+		t.Fatal("the channel of a disabled Threat must be closed")
 	}
+	if f.count() != 0 || th.Lists() != nil {
+		t.Fatal("disabled: Get must never be called")
+	}
+}
+
+func TestStartThreatOnRuns(t *testing.T) {
+	f := newFeed()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := StartThreat(ctx, true, newThreat(t, f))
+	select {
+	case <-f.gotCalls:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not start")
+	}
+	cancel()
+	<-done
 }

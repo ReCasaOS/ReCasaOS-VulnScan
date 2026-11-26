@@ -76,15 +76,14 @@ func main() {
 	scanner, runner := newScanner(events, docker)
 	api := &service.API{Scanner: scanner, DB: runner.DBUpdatedAt, Ctx: ctx}
 
-	var lists *service.Threat
+	client := &http.Client{Timeout: 2 * time.Minute}
+	lists := &service.Threat{
+		Dir: config.AppInfo.StatePath, Now: time.Now, MinKEV: 500, MinEPSS: 100_000,
+		Get: func(ctx context.Context, url string, max int64) ([]byte, error) {
+			return threat.Fetch(ctx, client, url, max)
+		},
+	}
 	if config.ThreatInfo.Enabled {
-		client := &http.Client{Timeout: 2 * time.Minute}
-		lists = &service.Threat{
-			Dir: config.AppInfo.StatePath, Now: time.Now, MinKEV: 500, MinEPSS: 100_000,
-			Get: func(ctx context.Context, url string, max int64) ([]byte, error) {
-				return threat.Fetch(ctx, client, url, max)
-			},
-		}
 		api.Threat = lists
 	}
 
@@ -132,13 +131,7 @@ func main() {
 		scanner.RunNightly(ctx)
 	}()
 
-	listing := make(chan struct{})
-	go func() {
-		defer close(listing)
-		if lists != nil {
-			lists.Run(ctx)
-		}
-	}()
+	listing := service.StartThreat(ctx, config.ThreatInfo.Enabled, lists)
 
 	following := make(chan struct{})
 	go func() {
