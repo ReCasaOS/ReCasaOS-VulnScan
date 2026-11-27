@@ -16,6 +16,7 @@ import (
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/codegen"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/config"
 	v2Route "github.com/ReCasaOS/ReCasaOS-VulnScan/route/v2"
+	"github.com/ReCasaOS/ReCasaOS-VulnScan/service"
 )
 
 type noScans struct{}
@@ -23,6 +24,7 @@ type noScans struct{}
 func (noScans) Status() codegen.Status     { return codegen.Status{} }
 func (noScans) Apps() []codegen.AppSummary { return []codegen.AppSummary{} }
 func (noScans) Start() bool                { return true }
+func (noScans) StartApp(string) error      { return nil }
 func (noScans) Compare(context.Context, string, string) codegen.Comparison {
 	return codegen.Comparison{Verdict: codegen.NotWorse, Added: []codegen.Finding{}}
 }
@@ -35,6 +37,7 @@ var everyRoute = []struct{ method, path string }{
 	{http.MethodGet, "/v2/vuln_scan/apps"},
 	{http.MethodGet, "/v2/vuln_scan/apps/nextcloud"},
 	{http.MethodPost, "/v2/vuln_scan/scan"},
+	{http.MethodPost, "/v2/vuln_scan/apps/nextcloud/scan"},
 }
 
 // The common library keeps user-service's public key for ten seconds whatever the runtime
@@ -157,6 +160,15 @@ type scansStub struct {
 }
 
 func (s scansStub) Start() bool { return !s.running }
+func (s scansStub) StartApp(name string) error {
+	if name != "vaultwarden" {
+		return service.ErrNoApp
+	}
+	if s.running {
+		return service.ErrRunning
+	}
+	return nil
+}
 func (scansStub) App(name string) (codegen.AppDetail, bool) {
 	return codegen.AppDetail{}, false
 }
@@ -191,6 +203,22 @@ func TestStartScanConflict(t *testing.T) {
 func TestStartScanAccepted(t *testing.T) {
 	if code, _ := ask(t, scansStub{}, http.MethodPost, "/v2/vuln_scan/scan"); code != http.StatusAccepted {
 		t.Fatalf("%d, want 202", code)
+	}
+}
+
+func TestStartAppScan(t *testing.T) {
+	for _, c := range []struct {
+		scans scansStub
+		app   string
+		want  int
+	}{
+		{scansStub{}, "vaultwarden", http.StatusAccepted},
+		{scansStub{running: true}, "vaultwarden", http.StatusConflict},
+		{scansStub{}, "nothing", http.StatusNotFound},
+	} {
+		if code, _ := ask(t, c.scans, http.MethodPost, "/v2/vuln_scan/apps/"+c.app+"/scan"); code != c.want {
+			t.Errorf("%s running=%v: %d, want %d", c.app, c.scans.running, code, c.want)
+		}
 	}
 }
 

@@ -172,3 +172,22 @@ func TestAPIFindingCarriesExploitedAndEPSS(t *testing.T) {
 		t.Fatalf("%s: want exploited 0 and no epss_max without lists", data)
 	}
 }
+
+func TestAPIStartApp(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1"), app("b", "sha256:2")}
+	r.pass()
+	r.scans = nil
+	api := newAPI(r)
+
+	if err := api.StartApp("nothing"); !errors.Is(err, ErrNoApp) {
+		t.Fatalf("err %v, want ErrNoApp", err)
+	}
+	if err := api.StartApp("b"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitIdle()
+	if len(r.scans) != 1 || r.scans[0] != "sha256:2" {
+		t.Fatalf("scans %v", r.scans)
+	}
+}
