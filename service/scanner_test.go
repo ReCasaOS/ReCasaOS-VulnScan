@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/threat"
 )
 
 // rig is a box made of stand-ins: its containers, what Trivy says of each image, the apps an
@@ -28,7 +30,10 @@ type rig struct {
 	busy       []bool // one answer per question, then not busy
 	free       uint64
 	published  []map[string]string
+	events     []string // the name of each event published
 	publishErr error
+	failEvent  string // an event the bus refuses
+	lists      *threat.Lists
 	tmpErr     error
 	tmp        string
 	now        time.Time
@@ -100,15 +105,19 @@ func newRig(t *testing.T) *rig {
 		Updates: func(context.Context) (map[string]bool, error) { return r.updates, r.updatesErr },
 		Free:    func(string) (uint64, error) { return r.free, nil },
 		Publish: func(name string, properties map[string]string) error {
-			if name != EventFound {
+			if name != EventFound && name != EventExploited {
 				t.Errorf("published %q", name)
 			}
 			if r.publishErr != nil {
 				return r.publishErr
 			}
-			r.published = append(r.published, properties)
+			if name == r.failEvent {
+				return errors.New("the message bus refuses " + name)
+			}
+			r.published, r.events = append(r.published, properties), append(r.events, name)
 			return nil
 		},
+		Threat:   func() *threat.Lists { return r.lists },
 		Now:      func() time.Time { return r.now },
 		BusyWait: time.Millisecond, BusyLimit: time.Second,
 	}
@@ -659,5 +668,117 @@ func TestPassDoesNotEmptyTmpDuringAScan(t *testing.T) {
 	}
 	if _, err := os.Stat(copyOfImage); !os.IsNotExist(err) {
 		t.Fatalf("the pass left the old copy: %v", err)
+	}
+}
+
+// A critical attackers exploit and one they do not are two alerts: the exploited one first.
+func TestTellsExploitedAndFoundSeparately(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("CRITICAL CVE-2024-0001", "CRITICAL CVE-2024-0002")
+	r.updates["a"] = true
+	r.lists = kevLists([]string{"CVE-2024-0001"}, nil)
+	r.pass()
+
+	want := []map[string]string{{"apps": "a", "count": "1"}, {"apps": "a", "count": "1"}}
+	if !reflect.DeepEqual(r.events, []string{EventExploited, EventFound}) || !reflect.DeepEqual(r.published, want) {
+		t.Fatalf("events %v, published %v", r.events, r.published)
+	}
+}
+
+// A critical told as found, that attackers start to exploit, is told once more: as exploited.
+func TestCriticalToldThenExploitedIsToldOnceMore(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("CRITICAL CVE-2024-0001")
+	r.updates["a"] = true
+	r.lists = kevLists(nil, nil)
+	r.pass()
+	r.lists = kevLists([]string{"CVE-2024-0001"}, nil)
+	r.pass()
+	r.pass()
+
+	if !reflect.DeepEqual(r.events, []string{EventFound, EventExploited}) || len(r.published) != 2 || r.published[1]["count"] != "1" {
+		t.Fatalf("events %v, published %v", r.events, r.published)
+	}
+}
+
+func TestHighEnteringKEVIsToldOnce(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("HIGH CVE-2024-0001")
+	r.updates["a"] = true
+	r.pass()
+	r.lists = kevLists([]string{"CVE-2024-0001"}, nil)
+	r.pass()
+	r.pass()
+
+	if want := []map[string]string{{"apps": "a", "count": "1"}}; !reflect.DeepEqual(r.events, []string{EventExploited}) || !reflect.DeepEqual(r.published, want) {
+		t.Fatalf("events %v, published %v", r.events, r.published)
+	}
+}
+
+func TestExploitedNotToldWithoutUpdate(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("HIGH CVE-2024-0001", "CRITICAL CVE-2024-0002")
+	r.lists = kevLists([]string{"CVE-2024-0001", "CVE-2024-0002"}, nil)
+	r.pass()
+
+	if state, _ := r.Snapshot(); len(r.events) != 0 || len(state.ToldExploited) != 0 {
+		t.Fatalf("events %v, told %v", r.events, state.ToldExploited)
+	}
+}
+
+// Each alert is noted only once the bus took it: the one it refused is told at the next pass.
+func TestFailedPublishIsToldAgain(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("CRITICAL CVE-2024-0001", "CRITICAL CVE-2024-0002")
+	r.updates["a"] = true
+	r.lists = kevLists([]string{"CVE-2024-0001"}, nil)
+	r.failEvent = EventExploited
+	r.pass()
+	if state, _ := r.Snapshot(); len(state.ToldExploited) != 0 || len(state.Told["a"]) != 1 {
+		t.Fatalf("told exploited %v, told %v", state.ToldExploited, state.Told)
+	}
+
+	r.failEvent = ""
+	r.pass()
+	r.pass()
+	if !reflect.DeepEqual(r.events, []string{EventFound, EventExploited}) || r.published[1]["count"] != "1" {
+		t.Fatalf("events %v, published %v", r.events, r.published)
+	}
+}
+
+func TestPassForgetsExploitedOfRemovedApps(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1"), app("b", "sha256:2")}
+	r.reports["sha256:1"], r.reports["sha256:2"] = report("HIGH CVE-2024-0001"), report("HIGH CVE-2024-0001")
+	r.updates["a"], r.updates["b"] = true, true
+	r.lists = kevLists([]string{"CVE-2024-0001"}, nil)
+	r.pass()
+	r.containers = r.containers[:1]
+	r.pass()
+
+	if state, _ := r.Snapshot(); len(state.ToldExploited["b"]) != 0 || len(state.ToldExploited["a"]) != 1 {
+		t.Fatalf("told exploited %v", state.ToldExploited)
+	}
+}
+
+// A critical told as exploited is never told again as found: the owner was told the stronger
+// thing, and the list going away (turned off, not loaded yet) changes nothing on the box.
+func TestToldAsExploitedIsNotToldAgainWhenTheListGoes(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.reports["sha256:1"] = report("CRITICAL CVE-2024-0001")
+	r.updates["a"] = true
+	r.lists = kevLists([]string{"CVE-2024-0001"}, nil)
+	r.pass()
+	r.lists = nil
+	r.pass()
+
+	if !reflect.DeepEqual(r.events, []string{EventExploited}) {
+		t.Fatalf("events %v, published %v", r.events, r.published)
 	}
 }

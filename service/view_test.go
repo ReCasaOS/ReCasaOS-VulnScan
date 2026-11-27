@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ReCasaOS/CasaOS-Common/external"
+	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/threat"
 	"github.com/ReCasaOS/ReCasaOS-VulnScan/pkg/trivy"
 )
 
@@ -29,7 +30,7 @@ func TestSummariesCounts(t *testing.T) {
 	}}
 
 	want := []AppSummary{{App: "app", Critical: 1, High: 2, ScannedAt: at}}
-	if got := Summaries(images, state, nil); !reflect.DeepEqual(got, want) {
+	if got := Summaries(images, state, nil, nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v\nwant %+v", got, want)
 	}
 }
@@ -43,7 +44,7 @@ func TestSummariesSkippedReason(t *testing.T) {
 	}}
 
 	want := []AppSummary{{App: "a"}, {App: "b", ScannedAt: at, Skipped: SkippedNoRoom, OSOnly: true}}
-	if got := Summaries(images, state, nil); !reflect.DeepEqual(got, want) {
+	if got := Summaries(images, state, nil, nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v\nwant %+v", got, want)
 	}
 }
@@ -53,7 +54,7 @@ func TestSummariesLoose(t *testing.T) {
 	state := State{Images: map[string]ImageResult{"sha256:1": {ScannedAt: at, Findings: []trivy.Finding{finding(trivy.Critical, "CVE-1", "openssl")}}}}
 
 	want := []AppSummary{{App: "byhand", Loose: true, Critical: 1, ScannedAt: at}}
-	if got := Summaries(images, state, map[string]bool{"byhand": true}); !reflect.DeepEqual(got, want) {
+	if got := Summaries(images, state, map[string]bool{"byhand": true}, nil); !reflect.DeepEqual(got, want) {
 		t.Fatalf("%+v\nwant %+v", got, want)
 	}
 }
@@ -65,7 +66,7 @@ func TestSummariesActionable(t *testing.T) {
 		"sha256:2": {ScannedAt: at, Findings: []trivy.Finding{finding(trivy.High, "CVE-2", "zlib")}},
 	}}
 
-	got := Summaries(images, state, map[string]bool{"critical": true, "high": true})
+	got := Summaries(images, state, map[string]bool{"critical": true, "high": true}, nil)
 	actionable := map[string]bool{}
 	for _, summary := range got {
 		actionable[summary.App] = summary.Actionable
@@ -156,5 +157,70 @@ func TestAppManagementDown(t *testing.T) {
 	}
 	if _, err := am.Updates(context.Background()); err == nil {
 		t.Error("Updates: no error")
+	}
+}
+
+// kevLists is the lists of exploited vulnerabilities a test needs: the ids in KEV, and the scores.
+func kevLists(kev []string, epss map[string]float32) *threat.Lists {
+	l := &threat.Lists{KEV: map[string]threat.KEVEntry{}, EPSS: epss}
+	for _, id := range kev {
+		l.KEV[id] = threat.KEVEntry{}
+	}
+	return l
+}
+
+// A high that attackers already exploit is something to do, as a critical is.
+func TestExploitedHighMakesActionable(t *testing.T) {
+	images := []Image{{ID: "sha256:1", Apps: []string{"a"}}}
+	state := State{Images: map[string]ImageResult{"sha256:1": {ScannedAt: at, Findings: []trivy.Finding{finding(trivy.High, "CVE-2024-0001", "zlib")}}}}
+
+	got := Summaries(images, state, map[string]bool{"a": true}, kevLists([]string{"CVE-2024-0001"}, nil))
+	if len(got) != 1 || !got[0].Actionable || got[0].Exploited != 1 || got[0].Critical != 0 || got[0].High != 1 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// EPSS only sorts: a likely exploit that no one is seen exploiting lights no badge.
+func TestEPSSDoesNotMakeActionable(t *testing.T) {
+	images := []Image{{ID: "sha256:1", Apps: []string{"a"}}}
+	state := State{Images: map[string]ImageResult{"sha256:1": {ScannedAt: at, Findings: []trivy.Finding{finding(trivy.High, "CVE-2024-0001", "zlib")}}}}
+
+	got := Summaries(images, state, map[string]bool{"a": true}, kevLists(nil, map[string]float32{"CVE-2024-0001": 0.99}))
+	if len(got) != 1 || got[0].Actionable || got[0].Exploited != 0 || got[0].EPSSMax != 0.99 {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestSummaryCountsExploitedAndEPSSMax(t *testing.T) {
+	images := []Image{{ID: "sha256:1", Apps: []string{"a"}}, {ID: "sha256:2", Apps: []string{"a"}}}
+	state := State{Images: map[string]ImageResult{
+		"sha256:1": {ScannedAt: at, Findings: []trivy.Finding{
+			finding(trivy.Critical, "CVE-2024-0001", "openssl"), finding(trivy.High, "CVE-2024-0002", "zlib"), finding(trivy.High, "CVE-2024-0003", "curl"),
+		}},
+		// an exploited vulnerability is one, whatever the number of images and packages that have it:
+		// as many as the alert says
+		"sha256:2": {ScannedAt: at, Findings: []trivy.Finding{finding(trivy.Critical, "CVE-2024-0001", "openssl"), finding(trivy.High, "CVE-2024-0002", "libz")}},
+	}}
+	l := kevLists([]string{"CVE-2024-0001", "CVE-2024-0002"}, map[string]float32{"CVE-2024-0002": 0.2, "CVE-2024-0003": 0.7})
+
+	got := Summaries(images, state, nil, l)
+	want := []AppSummary{{App: "a", Critical: 1, High: 3, Exploited: 2, EPSSMax: 0.7, ScannedAt: at}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v\nwant %+v", got, want)
+	}
+}
+
+// A box with no lists (turned off, or not downloaded yet) shows what it showed before them.
+func TestNoListsBehavesAsToday(t *testing.T) {
+	images := []Image{{ID: "sha256:1", Apps: []string{"a"}}, {ID: "sha256:2", Apps: []string{"b"}}}
+	state := State{Images: map[string]ImageResult{
+		"sha256:1": {ScannedAt: at, Findings: []trivy.Finding{finding(trivy.Critical, "CVE-2024-0001", "openssl")}},
+		"sha256:2": {ScannedAt: at, Findings: []trivy.Finding{finding(trivy.High, "CVE-2024-0002", "zlib")}},
+	}}
+
+	got := Summaries(images, state, map[string]bool{"a": true, "b": true}, nil)
+	want := []AppSummary{{App: "a", Critical: 1, Actionable: true, ScannedAt: at}, {App: "b", High: 1, ScannedAt: at}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v\nwant %+v", got, want)
 	}
 }

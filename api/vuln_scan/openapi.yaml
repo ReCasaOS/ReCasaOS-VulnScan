@@ -173,7 +173,7 @@ components:
 
     Status:
       type: object
-      required: [running, last_error]
+      required: [running, last_error, threat_error]
       properties:
         running:
           type: boolean
@@ -188,10 +188,17 @@ components:
           type: string
           format: date-time
           description: the date of the vulnerability database; absent before the first download
+        threat_updated_at:
+          type: string
+          format: date-time
+          description: the date of the list of exploited vulnerabilities (CISA KEV) in use; absent without a list
+        threat_error:
+          type: string
+          description: why the last download of the lists failed; empty when it did not
 
     AppSummary:
       type: object
-      required: [app, loose, critical, high, actionable, os_only, skipped]
+      required: [app, loose, critical, high, exploited, actionable, os_only, skipped]
       properties:
         app:
           type: string
@@ -203,9 +210,16 @@ components:
           type: integer
         high:
           type: integer
+        exploited:
+          type: integer
+          description: how many of its vulnerabilities (critical or high) attackers already exploit, by the CISA list (KEV)
+        epss_max:
+          type: number
+          format: float
+          description: the highest probability of exploitation (EPSS, 0 to 1) among its vulnerabilities; absent when none is known
         actionable:
           type: boolean
-          description: a critical vulnerability, and an update of the app is offered
+          description: a critical vulnerability, or a high one attackers exploit, and an update of the app is offered
         os_only:
           type: boolean
           description: the Java libraries of an image were not checked
@@ -247,7 +261,7 @@ components:
 
     Finding:
       type: object
-      required: [id, package, installed, fixed, severity, title, url]
+      required: [id, package, installed, fixed, severity, exploited, title, url]
       properties:
         id:
           type: string
@@ -261,6 +275,13 @@ components:
         severity:
           type: string
           enum: [CRITICAL, HIGH]
+        exploited:
+          type: boolean
+          description: attackers already exploit it, by the CISA list (KEV)
+        epss:
+          type: number
+          format: float
+          description: the probability of its exploitation in the next 30 days (EPSS, 0 to 1); absent when not known
         title:
           type: string
         url:

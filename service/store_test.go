@@ -21,15 +21,16 @@ func someState() State {
 			ScannedAt: at, DB: at.Add(-time.Hour), OSOnly: true,
 			Findings: []trivy.Finding{{ID: "CVE-1", Package: "openssl", Installed: "1", Fixed: "2", Severity: trivy.Critical}},
 		}, "sha256:bb": {Skipped: SkippedNoRoom}},
-		Told:    map[string][]string{"vaultwarden": {"CVE-1"}},
-		LastRun: at, LastError: "the box stayed busy",
+		Told:          map[string][]string{"vaultwarden": {"CVE-1"}},
+		ToldExploited: map[string][]string{"vaultwarden": {"CVE-2"}},
+		LastRun:       at, LastError: "the box stayed busy",
 	}
 }
 
 func TestLoadMissing(t *testing.T) {
 	state := Load(filepath.Join(t.TempDir(), "not-there"))
-	if state.Images == nil || state.Told == nil || len(state.Images)+len(state.Told) != 0 {
-		t.Fatalf("%+v: want two empty maps", state)
+	if state.Images == nil || state.Told == nil || state.ToldExploited == nil || len(state.Images)+len(state.Told)+len(state.ToldExploited) != 0 {
+		t.Fatalf("%+v: want three empty maps", state)
 	}
 }
 
@@ -41,7 +42,7 @@ func TestLoadTruncated(t *testing.T) {
 			t.Fatal(err)
 		}
 		state := Load(dir)
-		if state.Images == nil || state.Told == nil || len(state.Images) != 0 {
+		if state.Images == nil || state.Told == nil || state.ToldExploited == nil || len(state.Images) != 0 {
 			t.Fatalf("%q: %+v, want an empty state", content, state)
 		}
 	}

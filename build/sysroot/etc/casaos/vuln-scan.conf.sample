@@ -11,3 +11,8 @@ StatePath = /var/lib/casaos-vuln-scan
 ; empty: a folder beside Docker's data, where the room is
 WorkPath =
 TrivyPath = /usr/bin/casaos-trivy
+
+[threat]
+; download once a day (05:00) the lists of exploited vulnerabilities: CISA KEV and FIRST EPSS.
+; false: no download, nothing leaves the box
+Enabled = true
