@@ -782,3 +782,144 @@ func TestToldAsExploitedIsNotToldAgainWhenTheListGoes(t *testing.T) {
 		t.Fatalf("events %v, published %v", r.events, r.published)
 	}
 }
+
+// waitIdle waits for a pass started in the background to end.
+func (r *rig) waitIdle() {
+	r.t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); r.Running(); {
+		if time.Now().After(deadline) {
+			r.t.Fatal("the scan never ends")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestStartAppScansItsImagesOnly(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1"), app("b", "sha256:2"), app("b", "sha256:3")}
+	r.reports["sha256:1"], r.reports["sha256:2"], r.reports["sha256:3"] = report(), report(), report()
+	r.pass()
+	night := r.now
+	r.scans = nil
+	r.now = night.Add(time.Hour)
+	r.reports["sha256:2"] = report("HIGH CVE-NEW")
+
+	if err := r.StartApp(context.Background(), "b"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitIdle()
+
+	if !reflect.DeepEqual(r.scans, []string{"sha256:2", "sha256:3"}) {
+		t.Fatalf("scans %v, want the images of b only", r.scans)
+	}
+	state, images := r.Snapshot()
+	if len(images) != 3 || len(state.Images["sha256:2"].Findings) != 1 || !state.Images["sha256:2"].ScannedAt.Equal(r.now) {
+		t.Fatalf("%+v", state.Images)
+	}
+	if !state.Images["sha256:1"].ScannedAt.Equal(night) {
+		t.Fatalf("the image of a was touched: %+v", state.Images["sha256:1"])
+	}
+	if !state.LastRun.Equal(night) {
+		t.Fatalf("last run %v: one app is not the box's last run", state.LastRun)
+	}
+	if kept := Load(r.Dir); !reflect.DeepEqual(kept.Images, state.Images) {
+		t.Fatalf("what is on disk is not what is served: %+v", kept.Images)
+	}
+}
+
+func TestStartAppLooseContainer(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1"), {Name: "tool", ImageID: "sha256:2"}}
+	r.pass()
+	r.scans = nil
+
+	if err := r.StartApp(context.Background(), "tool"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitIdle()
+	if !reflect.DeepEqual(r.scans, []string{"sha256:2"}) {
+		t.Fatalf("scans %v", r.scans)
+	}
+}
+
+func TestStartAppUnknown(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.pass()
+
+	if err := r.StartApp(context.Background(), "nothing"); !errors.Is(err, ErrNoApp) {
+		t.Fatalf("err %v, want ErrNoApp", err)
+	}
+	if r.Running() {
+		t.Fatal("a pass started for an app that is not there")
+	}
+}
+
+func TestStartAppWhileAPassRuns(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.pass()
+	r.block = make(chan struct{})
+	if !r.Start(context.Background()) {
+		t.Fatal("the pass is refused")
+	}
+
+	if err := r.StartApp(context.Background(), "a"); !errors.Is(err, ErrRunning) {
+		t.Fatalf("err %v, want ErrRunning", err)
+	}
+	close(r.block)
+	r.waitIdle()
+}
+
+// Other images than at the last full pass: Follow would scan them all, and a pass of one
+// app that kept the containers listed now would hide that from it.
+func TestStartAppScansAllWhenTheBoxChanged(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1")}
+	r.pass()
+	r.scans = nil
+	r.now = r.now.Add(time.Hour)
+	r.containers = []Container{app("a", "sha256:1"), app("b", "sha256:2")}
+
+	if err := r.StartApp(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitIdle()
+
+	if !reflect.DeepEqual(r.scans, []string{"sha256:1", "sha256:2"}) {
+		t.Fatalf("scans %v, want every image", r.scans)
+	}
+	if state, images := r.Snapshot(); len(images) != 2 || !state.LastRun.Equal(r.now) {
+		t.Fatalf("last run %v, %d images: want a full pass", state.LastRun, len(images))
+	}
+}
+
+// One app scanned fine says nothing of why the last full pass stopped; one that fails says
+// why it did.
+func TestStartAppLastError(t *testing.T) {
+	r := newRig(t)
+	r.containers = []Container{app("a", "sha256:1"), app("b", "sha256:2")}
+	r.reports["sha256:2"] = "!database download failed"
+	r.pass()
+	night, _ := r.Snapshot()
+	if night.LastError == "" {
+		t.Fatal("the full pass kept no error")
+	}
+
+	if err := r.StartApp(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitIdle()
+	if state, _ := r.Snapshot(); state.LastError != night.LastError {
+		t.Fatalf("error %q, want the full pass's %q", state.LastError, night.LastError)
+	}
+
+	r.reports["sha256:1"] = "!no space left on device"
+	if err := r.StartApp(context.Background(), "a"); err != nil {
+		t.Fatal(err)
+	}
+	r.waitIdle()
+	if state, _ := r.Snapshot(); !strings.Contains(state.LastError, "no space left") {
+		t.Fatalf("error %q, want the failure of the app's scan", state.LastError)
+	}
+}

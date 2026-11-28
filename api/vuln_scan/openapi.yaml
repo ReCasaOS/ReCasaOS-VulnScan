@@ -60,6 +60,28 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
 
+  /apps/{app}/scan:
+    post:
+      summary: Start a scan of the images of one app now
+      description: |
+        Scans again only the images of the app (or of the loose container of that name), with the same one turn as a full scan. When the containers of the box run other images than at the last full scan, it scans every image instead. Only a full scan changes `last_run`.
+      operationId: startAppScan
+      parameters:
+        - name: app
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 255
+      responses:
+        "202":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+
   /scan:
     post:
       summary: Start a scan now

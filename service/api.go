@@ -56,6 +56,10 @@ func (a *API) Start() bool {
 	return a.Scanner.Start(a.Ctx)
 }
 
+func (a *API) StartApp(name string) error {
+	return a.Scanner.StartApp(a.Ctx, name)
+}
+
 // offered is the updates offered, by app, as app-management last said them. When it does
 // not answer nothing is offered: a badge says there is an update to install, and it must not
 // be lit on a guess.

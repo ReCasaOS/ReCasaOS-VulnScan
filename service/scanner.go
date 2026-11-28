@@ -6,6 +6,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -28,7 +29,10 @@ const EventFound = "vuln:found"
 // exploit, by the lists in use. A vulnerability told by it is not told by EventFound.
 const EventExploited = "vuln:exploited"
 
-var ErrRunning = errors.New("a scan is already running")
+var (
+	ErrRunning = errors.New("a scan is already running")
+	ErrNoApp   = errors.New("no app of that name on this box")
+)
 
 // roomMargin is what must stay free beside the copy of the image Trivy makes, and
 // roomDatabase what the vulnerability database takes (1.7 GB measured), which the first
@@ -126,7 +130,7 @@ func (s *Scanner) Pass(ctx context.Context) error {
 	if !s.begin() {
 		return ErrRunning
 	}
-	s.run(ctx)
+	s.run(ctx, "")
 
 	return nil
 }
@@ -136,9 +140,24 @@ func (s *Scanner) Start(ctx context.Context) bool {
 	if !s.begin() {
 		return false
 	}
-	go s.run(ctx)
+	go s.run(ctx, "")
 
 	return true
+}
+
+// StartApp scans again, in the background, the images of one app only: after a fix to it,
+// the administrator need not wait for every other image. It is ErrNoApp for a name the last
+// pass did not see and ErrRunning when a pass runs already; it shares their one turn.
+func (s *Scanner) StartApp(ctx context.Context, name string) error {
+	if _, images := s.Snapshot(); !slices.ContainsFunc(images, func(image Image) bool { return image.uses(name) }) {
+		return ErrNoApp
+	}
+	if !s.begin() {
+		return ErrRunning
+	}
+	go s.run(ctx, name)
+
+	return nil
 }
 
 // begin claims the one pass that may run.
@@ -154,17 +173,24 @@ func (s *Scanner) begin() bool {
 	return true
 }
 
-// run is a pass that begin has claimed.
-func (s *Scanner) run(ctx context.Context) {
+// run is a pass that begin has claimed: of every image, or of the images of the app only.
+//
+// A pass of one app keeps the inventory of the last full pass: one that took the containers
+// listed now would have Follow miss the other apps installed meanwhile, whose images it does
+// not scan. When the containers run other images than in that inventory, the pass scans
+// everything instead, as Follow would. Only a full pass is the box's last run, and
+// only a failure replaces the full pass's LastError: one app scanned fine says nothing of
+// why the night stopped.
+func (s *Scanner) run(ctx context.Context, only string) {
 	s.mu.Lock()
 	state := s.state
 	state.Images, state.Told, state.ToldExploited = maps.Clone(s.state.Images), maps.Clone(s.state.Told), maps.Clone(s.state.ToldExploited)
 	s.mu.Unlock()
 
-	state.LastError = ""
+	failed := ""
 	fail := func(words string) {
-		if state.LastError == "" {
-			state.LastError = words
+		if failed == "" {
+			failed = words
 		}
 	}
 
@@ -175,16 +201,22 @@ func (s *Scanner) run(ctx context.Context) {
 	} else if listed, err := s.Docker.Containers(ctx); err != nil {
 		fail(err.Error())
 	} else {
-		state.Inventory = GroupImages(listed)
-		s.scan(ctx, tmp, &state, fail)
+		if listed := GroupImages(listed); only == "" || !reflect.DeepEqual(listed, state.Inventory) {
+			state.Inventory, only = listed, ""
+		}
+		s.scan(ctx, tmp, &state, only, fail)
 		forget(&state)
 		s.tell(ctx, &state)
 	}
 
-	state.LastRun = s.Now()
+	if only == "" {
+		state.LastRun, state.LastError = s.Now(), failed
+	} else if failed != "" {
+		state.LastError = failed
+	}
 	if err := state.Save(s.Dir); err != nil {
 		logger.Error("the scan results cannot be kept", zap.String("dir", s.Dir), zap.Error(err))
-		fail(err.Error())
+		state.LastError = err.Error()
 	}
 
 	s.mu.Lock()
@@ -250,8 +282,12 @@ func (s *Scanner) emptyTmp(ctx context.Context) (string, error) {
 	return tmp, nil
 }
 
-func (s *Scanner) scan(ctx context.Context, tmp string, state *State, fail func(string)) {
+// scan scans the images of the inventory, or those of the app only when it is named.
+func (s *Scanner) scan(ctx context.Context, tmp string, state *State, only string, fail func(string)) {
 	for _, image := range state.Inventory {
+		if only != "" && !image.uses(only) {
+			continue
+		}
 		if ctx.Err() != nil {
 			fail(ctx.Err().Error())
 			return

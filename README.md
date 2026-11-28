@@ -21,8 +21,9 @@ database is another 1.5 GB); the app's window says so.
 ## The routes
 
 Under `/v2/vuln_scan`, for the administrator only: `GET /status`, `GET /apps`,
-`GET /apps/{app}`, `POST /scan`, `POST /compare` (whether an update's image has more critical
-vulnerabilities than the running one). See `api/vuln_scan/openapi.yaml`.
+`GET /apps/{app}`, `POST /scan`, `POST /apps/{app}/scan` (that app's images only),
+`POST /compare` (whether an update's image has more critical vulnerabilities than the
+running one). See `api/vuln_scan/openapi.yaml`.
 
 One event on the message bus, source `vuln-scan`: `vuln:found`, with `apps` and `count`.
 

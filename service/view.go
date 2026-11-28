@@ -139,13 +139,18 @@ func btoi(b bool) int {
 	return 0
 }
 
+// uses says whether the app, or the loose container of that name, runs the image.
+func (image Image) uses(name string) bool {
+	return slices.Contains(image.Apps, name) || slices.Contains(image.Loose, name)
+}
+
 // Detail is the result of each image of an app (or of a loose container of that name), by
 // image id; an image not scanned yet has an empty result. found is false when nothing on the
 // box has that name.
 func Detail(app string, images []Image, state State) (byImage map[string]ImageResult, found bool) {
 	byImage = map[string]ImageResult{}
 	for _, image := range images {
-		if slices.Contains(image.Apps, app) || slices.Contains(image.Loose, app) {
+		if image.uses(app) {
 			byImage[image.ID] = state.Images[image.ID]
 		}
 	}
